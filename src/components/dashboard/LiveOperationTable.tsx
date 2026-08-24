@@ -1,7 +1,16 @@
-import { Inbox } from "lucide-react";
+import { Inbox, Lock } from "lucide-react";
 import type { Vehicle } from "@/data/vehicleModel";
 import { cn } from "@/lib/utils";
-import { StatusBadge, gpsLabel, gpsTone, situacaoLabel, situacaoTone } from "./ui-bits";
+import { StatusBadge, estadoLabel, estadoTone, situacaoLabel, situacaoTone } from "./ui-bits";
+
+/** Cor do atraso: só o texto muda, o valor em si já está congelado. */
+function atrasoCor(v: Vehicle) {
+  if (!v.saiu) return "text-muted-foreground";
+  if (v.saidaStatus === "atraso_alto") return "text-crit";
+  if (v.saidaStatus === "atraso_leve") return "text-warn";
+  if (v.saidaStatus === "no_horario") return "text-ok";
+  return "text-muted-foreground";
+}
 
 function fmtParado(min: number | null) {
   if (min === null) return "—";
@@ -16,10 +25,11 @@ const headers = [
   "Transportadora",
   "Tipo",
   "Destino / Ponto",
-  "Status GPS",
-  "Saída prevista",
+  "Estado",
+  "Horário-limite",
   "Saída real",
-  "Chegada transbordo",
+  "Atraso",
+  "Chegada no PA",
   "Velocidade",
   "Tempo parado",
   "Última posição",
@@ -92,13 +102,22 @@ export function LiveOperationTable({
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-foreground">{v.destino}</td>
                 <td className="px-4 py-3 whitespace-nowrap">
-                  <StatusBadge label={gpsLabel(v.statusGps)} tone={gpsTone(v.statusGps)} />
+                  <StatusBadge label={estadoLabel(v.estado)} tone={estadoTone(v.estado)} />
                 </td>
                 <td className="tabular px-4 py-3 whitespace-nowrap text-muted-foreground">
                   {v.saidaPrevista}
                 </td>
                 <td className="tabular px-4 py-3 font-medium whitespace-nowrap text-foreground">
                   {v.saidaReal ?? "—"}
+                  {v.registroTravado && (
+                    <Lock
+                      className="ml-1.5 inline size-3 align-[-1px] text-subtle"
+                      aria-label="Registro travado"
+                    />
+                  )}
+                </td>
+                <td className="tabular px-4 py-3 whitespace-nowrap">
+                  <span className={cn("font-medium", atrasoCor(v))}>{v.atrasoTexto ?? "—"}</span>
                 </td>
                 <td className="tabular px-4 py-3 whitespace-nowrap">
                   {v.tipo === "Transbordo" && v.chegadaTransbordo ? (
@@ -120,10 +139,7 @@ export function LiveOperationTable({
                   {v.gpsAtualizadoEm === null ? "—" : `há ${v.gpsAtualizadoEm} min`}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
-                  <StatusBadge
-                    label={situacaoLabel(v.situacao)}
-                    tone={situacaoTone(v.situacao)}
-                  />
+                  <StatusBadge label={situacaoLabel(v.situacao)} tone={situacaoTone(v.situacao)} />
                 </td>
               </tr>
             ))}
@@ -144,14 +160,14 @@ export function LiveOperationTable({
           >
             <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
               <span className="tabular truncate font-semibold text-foreground">{v.placa}</span>
-              <StatusBadge label={gpsLabel(v.statusGps)} tone={gpsTone(v.statusGps)} />
+              <StatusBadge label={estadoLabel(v.estado)} tone={estadoTone(v.estado)} />
             </div>
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {v.motorista} · {v.transportadora} · {v.destino}
             </p>
             <dl className="tabular mt-3 grid grid-cols-2 gap-2 text-xs">
               <div>
-                <dt className="text-subtle">Saída prevista</dt>
+                <dt className="text-subtle">Horário-limite</dt>
                 <dd className="text-foreground">{v.saidaPrevista}</dd>
               </div>
               <div>
@@ -159,14 +175,14 @@ export function LiveOperationTable({
                 <dd className="text-foreground">{v.saidaReal ?? "—"}</dd>
               </div>
               <div>
-                <dt className="text-subtle">Chegada transbordo</dt>
+                <dt className="text-subtle">Atraso</dt>
+                <dd className={cn("font-medium", atrasoCor(v))}>{v.atrasoTexto ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-subtle">Chegada no PA</dt>
                 <dd className="text-foreground">
                   {v.tipo === "Transbordo" ? (v.chegadaTransbordo ?? "—") : "—"}
                 </dd>
-              </div>
-              <div>
-                <dt className="text-subtle">Velocidade</dt>
-                <dd className="text-foreground">{v.velocidade} km/h</dd>
               </div>
             </dl>
             <div className="mt-3 flex items-center justify-between gap-2">

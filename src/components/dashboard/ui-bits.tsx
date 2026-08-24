@@ -28,9 +28,7 @@ export function Panel({
               <h2 className="truncate text-[13px] font-semibold tracking-[0.09em] text-foreground uppercase">
                 {title}
               </h2>
-              {subtitle && (
-                <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
-              )}
+              {subtitle && <p className="truncate text-xs text-muted-foreground">{subtitle}</p>}
             </div>
           </div>
           {right}
@@ -80,16 +78,19 @@ export function StatusBadge({
   );
 }
 
-export function gpsTone(status: string): Tone {
-  switch (status) {
+/** Tom do estado operacional — a mesma régua dos cards. */
+export function estadoTone(estado: string): Tone {
+  switch (estado) {
     case "Em rota":
       return "ok";
     case "Parado":
-      return "brand";
-    case "Em atencao":
       return "warn";
-    case "GPS desatualizado":
+    case "Em atencao":
       return "crit";
+    case "Sem sinal":
+      return "neutral";
+    case "Concluido":
+      return "transfer";
     default:
       return "neutral";
   }
@@ -103,8 +104,6 @@ export function situacaoTone(s: string): Tone {
       return "warn";
     case "Atraso alto":
       return "crit";
-    case "Concluido":
-      return "cyan";
     case "Conferir horario":
       return "transfer";
     default:
@@ -112,14 +111,22 @@ export function situacaoTone(s: string): Tone {
   }
 }
 
-export const gpsLabel = (s: string) => (s === "Em atencao" ? "Em atenção" : s);
+export const estadoLabel = (s: string) =>
+  s === "Em atencao"
+    ? "Em atenção"
+    : s === "Sem sinal"
+      ? "Sem sinal GPS"
+      : s === "Concluido"
+        ? "Concluído"
+        : s;
+
 export const situacaoLabel = (s: string) =>
   s === "No horario"
     ? "No horário"
     : s === "Aguardando saida"
       ? "Aguardando saída"
-      : s === "Concluido"
-        ? "Concluído"
+      : s === "Nao saiu"
+        ? "Não saiu"
         : s === "Conferir horario"
           ? "Conferir horário"
           : s;

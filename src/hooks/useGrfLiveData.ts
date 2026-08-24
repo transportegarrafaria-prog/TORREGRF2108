@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchGrfPayload, type GrfPayload } from "@/services/grfApi";
-import { buildAlerts, buildTimeline, buildVehicles, horaDeIso } from "@/services/grfTransform";
-import type { AlertItem, TimelineEvent, Vehicle } from "@/data/vehicleModel";
+import {
+  buildAlerts,
+  buildHistorico,
+  buildTimeline,
+  buildVehicles,
+  horaDeIso,
+} from "@/services/grfTransform";
+import type { AlertItem, HistoricoIndicador, TimelineEvent, Vehicle } from "@/data/vehicleModel";
 
 const REFRESH_MS = 60_000;
 
@@ -9,6 +15,8 @@ export interface GrfLiveData {
   vehicles: Vehicle[];
   alerts: AlertItem[];
   timeline: TimelineEvent[];
+  historico: HistoricoIndicador | null;
+  dataOperacional: string | null;
   atualizadoEm: string;
   loading: boolean;
   hasData: boolean;
@@ -50,6 +58,7 @@ export function useGrfLiveData(): GrfLiveData {
   const vehicles = payload ? buildVehicles(payload) : [];
   const alerts = payload ? buildAlerts(vehicles, payload) : [];
   const timeline = payload ? buildTimeline(vehicles, payload) : [];
+  const historico = payload ? buildHistorico(payload) : null;
 
   const maisRecente = (payload?.monitoramento ?? [])
     .map((m) => m.atualizadoEm ?? null)
@@ -63,6 +72,8 @@ export function useGrfLiveData(): GrfLiveData {
     vehicles,
     alerts,
     timeline,
+    historico,
+    dataOperacional: payload?.dataOperacional ?? null,
     atualizadoEm,
     loading,
     hasData: payload !== null,

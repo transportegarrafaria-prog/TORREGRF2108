@@ -1,20 +1,18 @@
 import type { Vehicle } from "@/data/vehicleModel";
 
+/**
+ * Cumprimento das saídas — lê o mesmo registro travado dos cards.
+ * "No horário" aqui é exatamente o card "Saíram no horário": uma
+ * vez que o veículo saiu, a classificação não muda mais.
+ */
 export function DepartureSlaChart({ vehicles }: { vehicles: Vehicle[] }) {
   const saidos = vehicles.filter((v) => v.saiu);
-  const noHorario = saidos.filter(
-    (v) => v.slaSaidaConfiavel && v.saidaStatus === "no_horario",
-  ).length;
-  const leve = saidos.filter(
-    (v) => v.slaSaidaConfiavel && v.saidaStatus === "atraso_leve",
-  ).length;
-  const alto = saidos.filter(
-    (v) => v.slaSaidaConfiavel && v.saidaStatus === "atraso_alto",
-  ).length;
-  const conferir = saidos.filter(
-    (v) => !v.slaSaidaConfiavel || v.saidaStatus === "registrada",
-  ).length;
-  const aguardando = vehicles.filter((v) => !v.saiu).length;
+  const noHorario = saidos.filter((v) => v.saidaStatus === "no_horario").length;
+  const leve = saidos.filter((v) => v.saidaStatus === "atraso_leve").length;
+  const alto = saidos.filter((v) => v.saidaStatus === "atraso_alto").length;
+  const conferir = saidos.filter((v) => v.saidaStatus === "registrada").length;
+  const naoSaiu = vehicles.filter((v) => !v.saiu && v.situacao === "Nao saiu").length;
+  const aguardando = vehicles.filter((v) => !v.saiu && v.situacao !== "Nao saiu").length;
 
   const rows = [
     { label: "No horário", value: noHorario, color: "var(--ok)" },
@@ -22,7 +20,9 @@ export function DepartureSlaChart({ vehicles }: { vehicles: Vehicle[] }) {
     { label: "Atraso acima de 60 min", value: alto, color: "var(--crit)" },
     { label: "Conferir horário", value: conferir, color: "var(--transfer)" },
     { label: "Aguardando saída", value: aguardando, color: "var(--subtle)" },
-  ];
+    { label: "Não saiu", value: naoSaiu, color: "var(--muted-foreground)" },
+  ].filter((r) => r.value > 0 || r.label !== "Não saiu");
+
   const total = vehicles.length || 1;
   const classificados = noHorario + leve + alto;
   const pct = classificados ? Math.round((noHorario / classificados) * 100) : 0;
@@ -34,7 +34,9 @@ export function DepartureSlaChart({ vehicles }: { vehicles: Vehicle[] }) {
           {pct}%
         </p>
         <p className="mt-1.5 text-xs text-muted-foreground">
-          saídas dentro do horário previsto
+          {classificados
+            ? `${noHorario} de ${classificados} saídas medidas dentro do horário-limite`
+            : "nenhuma saída medida ainda"}
         </p>
       </div>
       <ul className="flex flex-col gap-2.5">
