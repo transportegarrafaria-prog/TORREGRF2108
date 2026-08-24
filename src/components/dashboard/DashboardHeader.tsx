@@ -1,5 +1,13 @@
+import { useState } from "react";
 import { RefreshCw, Radio } from "lucide-react";
-import logo from "@/assets/grf-logo.jpg.asset.json";
+
+/**
+ * A logo é servida de public/ — arquivo de verdade no repositório.
+ * Antes vinha de um stub do Lovable (/__l5e/assets-v1/...), caminho que
+ * só existe dentro daquele runtime: fora dele a imagem quebrava.
+ * Se o arquivo faltar, cai num selo neutro em vez de imagem quebrada.
+ */
+const LOGO_SRC = "/grf-logo.png";
 
 export function DashboardHeader({
   atualizadoEm,
@@ -10,14 +18,26 @@ export function DashboardHeader({
   loading?: boolean;
   onRefresh?: () => void;
 }) {
+  const [logoOk, setLogoOk] = useState(true);
+
   return (
     <header className="sticky top-0 z-[900] grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-border bg-surface/95 px-4 py-3 backdrop-blur md:px-6 lg:h-[72px] lg:py-0">
       <div className="flex min-w-0 items-center gap-3 md:gap-4">
-        <img
-          src={logo.url}
-          alt="GRF Distribuição"
-          className="h-9 w-auto shrink-0 rounded-md md:h-11"
-        />
+        {logoOk ? (
+          <img
+            src={LOGO_SRC}
+            alt="GRF Distribuição"
+            onError={() => setLogoOk(false)}
+            className="h-9 w-auto shrink-0 rounded-md md:h-11"
+          />
+        ) : (
+          <span
+            aria-label="GRF Distribuição"
+            className="grid h-9 shrink-0 place-items-center rounded-md border border-border-strong bg-card px-2.5 text-sm font-bold tracking-[0.12em] text-primary md:h-11"
+          >
+            GRF
+          </span>
+        )}
         <span className="hidden h-9 w-px shrink-0 bg-border-strong sm:block" />
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2.5">
@@ -46,9 +66,7 @@ export function DashboardHeader({
           disabled={loading}
           className="inline-flex disabled:opacity-60 h-9 items-center gap-2 rounded-lg border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-colors hover:border-border-strong hover:bg-accent"
         >
-          <RefreshCw
-            className={`size-4 text-muted-foreground${loading ? " animate-spin" : ""}`}
-          />
+          <RefreshCw className={`size-4 text-muted-foreground${loading ? " animate-spin" : ""}`} />
           <span className="hidden sm:inline">Atualizar</span>
         </button>
       </div>
