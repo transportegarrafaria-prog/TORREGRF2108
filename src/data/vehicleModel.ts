@@ -64,8 +64,21 @@ export interface Vehicle {
   travaManual: boolean;
 }
 
+/**
+ * Recortes que o painel sabe filtrar. Os sete primeiros são os cards;
+ * "semSinal" e "concluidos" existem só para o gráfico de Status da Frota
+ * poder selecionar esses dois estados, que não têm card próprio.
+ */
 export type KpiKey =
-  "programados" | "noHorario" | "emRota" | "parados" | "atencao" | "transbordos" | "naBase";
+  | "programados"
+  | "noHorario"
+  | "emRota"
+  | "parados"
+  | "atencao"
+  | "transbordos"
+  | "naBase"
+  | "semSinal"
+  | "concluidos";
 
 /**
  * Regras dos cards. São as mesmas do script:
@@ -80,6 +93,8 @@ export const kpiPredicates: Record<KpiKey, (v: Vehicle) => boolean> = {
   atencao: (v) => v.estado === "Em atencao",
   transbordos: (v) => v.tipo === "Transbordo",
   naBase: (v) => v.estado === "Na base",
+  semSinal: (v) => v.estado === "Sem sinal",
+  concluidos: (v) => v.estado === "Concluido",
 };
 
 export const kpiLabels: Record<KpiKey, string> = {
@@ -90,6 +105,8 @@ export const kpiLabels: Record<KpiKey, string> = {
   atencao: "Em atenção",
   transbordos: "Transbordos",
   naBase: "Na base",
+  semSinal: "Sem sinal GPS",
+  concluidos: "Concluídos",
 };
 
 /** Ordem e rótulo dos estados no gráfico de Status da Frota. */
@@ -118,6 +135,16 @@ export const estadoCores: Record<EstadoFrota, string> = {
   "Sem sinal": "var(--grf-cyan)",
   Concluido: "var(--transfer)",
   "Na base": "var(--subtle)",
+};
+
+/** De qual recorte cada fatia do Status da Frota é dona. */
+export const estadoParaKpi: Record<EstadoFrota, KpiKey> = {
+  "Em rota": "emRota",
+  Parado: "parados",
+  "Em atencao": "atencao",
+  "Sem sinal": "semSinal",
+  Concluido: "concluidos",
+  "Na base": "naBase",
 };
 
 export interface Filters {

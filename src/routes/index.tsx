@@ -37,9 +37,11 @@ import {
   applyFilters,
   destinosDe,
   emptyFilters,
+  estadoParaKpi,
   kpiLabels,
   kpiPredicates,
   transportadorasDe,
+  type EstadoFrota,
   type Filters,
   type KpiKey,
 } from "@/data/vehicleModel";
@@ -99,6 +101,10 @@ function TorreDeControle() {
 
   const toggleKpi = (key: KpiKey) =>
     setKpi((c) => (key === "programados" ? null : c === key ? null : key));
+
+  // Estado destacado no gráfico de frota: o recorte ativo, quando ele é um estado.
+  const estadoSelecionado =
+    (Object.keys(estadoParaKpi) as EstadoFrota[]).find((e) => estadoParaKpi[e] === kpi) ?? null;
 
   const cards = [
     {
@@ -255,7 +261,11 @@ function TorreDeControle() {
               icon={<PieChart className="size-4" />}
               className="xl:col-span-1"
             >
-              <FleetStatusChart vehicles={vehicles} />
+              <FleetStatusChart
+                vehicles={baseFiltered}
+                selected={estadoSelecionado}
+                onSelect={(estado) => toggleKpi(estadoParaKpi[estado])}
+              />
             </Panel>
             <Panel title="Cumprimento das saídas" icon={<ChartNoAxesCombined className="size-4" />}>
               <DepartureSlaChart vehicles={vehicles} />
