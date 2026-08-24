@@ -1,19 +1,22 @@
-import type {
-  GrfMonitoramento,
-  GrfOperacao,
-  GrfPayload,
-} from "./grfApi";
+import type { GrfHistoricoRanking, GrfMonitoramento, GrfOperacao, GrfPayload } from "./grfApi";
 import type {
   AlertItem,
+  EstadoFrota,
+  HistoricoIndicador,
+  RankingAtraso,
   SaidaStatus,
   Situacao,
-  StatusGps,
   TimelineEvent,
   Vehicle,
   VehicleTipo,
 } from "@/data/vehicleModel";
 
 const TZ = "America/Sao_Paulo";
+
+/** Réguas padrão — o script manda as dele no payload e elas mandam. */
+const PADRAO_STALE_MIN = 15;
+const PADRAO_PARADO_MIN = 45;
+const PADRAO_ATENCAO_MIN = 60;
 
 export function normPlaca(p: unknown): string {
   return String(p ?? "")
@@ -50,12 +53,11 @@ function txt(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
-function tipoDe(v: unknown): VehicleTipo {
-  return txt(v).toLowerCase().startsWith("transbordo") ? "Transbordo" : "Distribuicao";
-}
-
 function normalizeTerm(s: string): string {
-  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
 const transbordoFallbackTerms = [
@@ -73,11 +75,69 @@ const transbordoFallbackTerms = [
   "angra",
 ];
 
-function tipoPorDestinoFallback(destino: unknown): VehicleTipo {
+function tipoDe(tipo: unknown, destino: unknown): VehicleTipo {
+  if (normalizeTerm(txt(tipo)).startsWith("transbordo")) return "Transbordo";
+  if (txt(tipo)) return "Distribuicao";
   const d = normalizeTerm(txt(destino));
   return transbordoFallbackTerms.some((t) => d.includes(t)) ? "Transbordo" : "Distribuicao";
 }
 
+/** Data operacional já encerrada: quem não saiu não sai mais. */
+function diaEncerrado(dataOperacional: string | null | undefined): boolean {
+  const dia = txt(dataOperacional);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) return false;
+  const hoje = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  return dia < hoje;
+}
+
+interface Reguas {
+  staleMin: number;
+  paradoMin: number;
+  atencaoMin: number;
+}
+
+function reguasDe(payload: GrfPayload): Reguas {
+  return {
+    staleMin: num(payload.staleMin) ?? PADRAO_STALE_MIN,
+    paradoMin: num(payload.stopCritMin) ?? PADRAO_PARADO_MIN,
+    atencaoMin: num(payload.stopAttentionMin) ?? PADRAO_ATENCAO_MIN,
+  };
+}
+
+const estadosValidos: EstadoFrota[] = [
+  "Na base",
+  "Em rota",
+  "Parado",
+  "Em atencao",
+  "Sem sinal",
+  "Concluido",
+];
+
+/**
+ * A MESMA regra do Apps Script (estadoOperacional_), repetida aqui
+ * para o painel continuar correto mesmo com uma versão antiga do
+ * script publicada. Quando o script manda `estado`, ele tem a palavra.
+ */
+export function estadoDe(
+  saiu: boolean,
+  chegou: boolean,
+  gpsIdadeMin: number | null,
+  paradoMin: number | null,
+  r: Reguas,
+): EstadoFrota {
+  if (!saiu) return "Na base";
+  if (chegou) return "Concluido";
+  if (gpsIdadeMin === null || gpsIdadeMin > r.staleMin) return "Sem sinal";
+  const parado = paradoMin ?? 0;
+  if (parado >= r.atencaoMin) return "Em atencao";
+  if (parado >= r.paradoMin) return "Parado";
+  return "Em rota";
+}
 
 function saidaStatusDe(v: unknown): SaidaStatus | null {
   const s = txt(v).toLowerCase();
@@ -92,9 +152,8 @@ function saidaStatusDe(v: unknown): SaidaStatus | null {
   return null;
 }
 
-function situacaoDe(saiu: boolean, status: SaidaStatus, slaConfiavel = true): Situacao {
-  if (!saiu) return "Aguardando saida";
-  if (!slaConfiavel) return "Conferir horario";
+function situacaoDe(saiu: boolean, status: SaidaStatus, encerrado: boolean): Situacao {
+  if (!saiu) return encerrado ? "Nao saiu" : "Aguardando saida";
   switch (status) {
     case "no_horario":
       return "No horario";
@@ -102,87 +161,43 @@ function situacaoDe(saiu: boolean, status: SaidaStatus, slaConfiavel = true): Si
       return "Atraso leve";
     case "atraso_alto":
       return "Atraso alto";
-    case "registrada":
-      return "Conferir horario";
     default:
-      return "Aguardando saida";
+      return "Conferir horario";
   }
 }
 
-interface GpsInfo {
-  statusGps: StatusGps;
-  gpsDesatualizado: boolean;
-  paradaProlongada: boolean;
-  monitorSituacao: string | null;
-}
-
-function gpsInfo(m: GrfMonitoramento | undefined): GpsInfo {
-  const s = txt(m?.situacao).toUpperCase();
-  if (!m || !s || s.includes("DESATUALIZAD"))
-    return {
-      statusGps: "GPS desatualizado",
-      gpsDesatualizado: true,
-      paradaProlongada: false,
-      monitorSituacao: s || null,
-    };
-  if (s.includes("PARADA PROLONGADA"))
-    return {
-      statusGps: "Parado",
-      gpsDesatualizado: false,
-      paradaProlongada: true,
-      monitorSituacao: s,
-    };
-  if (s.includes("MOVIMENTO") || s.includes("ROTA"))
-    return {
-      statusGps: "Em rota",
-      gpsDesatualizado: false,
-      paradaProlongada: false,
-      monitorSituacao: s,
-    };
-  if (s.includes("PARADO"))
-    return {
-      statusGps: "Parado",
-      gpsDesatualizado: false,
-      paradaProlongada: false,
-      monitorSituacao: s,
-    };
-  return {
-    statusGps: "Em atencao",
-    gpsDesatualizado: false,
-    paradaProlongada: false,
-    monitorSituacao: s,
-  };
+function fmtDur(min: number) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h ? `${h}h${String(m).padStart(2, "0")}` : `${m} min`;
 }
 
 function fromOperacao(
   op: GrfOperacao,
   m: GrfMonitoramento | undefined,
-  stopCritMin: number,
+  r: Reguas,
+  encerrado: boolean,
   index: number,
 ): Vehicle {
   const placa = normPlaca(op.placa ?? op.placaOriginal);
   const saiu = bool(op.saiu);
-  const chegou = bool(op.chegou);
-  const tipo = tipoDe(op.tipo);
+  const tipo = tipoDe(op.tipo, op.destino ?? m?.destino);
+  const chegou = tipo === "Transbordo" && bool(op.chegou);
+
+  const paradoMin = num(op.paradoMin) ?? num(m?.paradoMin);
+  const gpsIdadeMin = num(op.gpsIdadeMin) ?? num(m?.gpsIdadeMin);
+
+  const estadoApi = txt(op.estado) as EstadoFrota;
+  const estado: EstadoFrota =
+    saiu && estadosValidos.includes(estadoApi)
+      ? estadoApi
+      : estadoDe(saiu, chegou, gpsIdadeMin, paradoMin, r);
+
   const statusApi = saidaStatusDe(op.saidaStatus);
   const saidaStatus: SaidaStatus = saiu ? (statusApi ?? "registrada") : "pendente";
-  const slaConfiavel = op.slaSaidaConfiavel === true;
-
-  const gps = saiu ? gpsInfo(m) : null;
-  const statusGps: StatusGps = saiu ? gps!.statusGps : "Na base";
-
-  const paradoMin = num(m?.paradoMin);
-  const divergencia =
-    bool(op.horarioSaidaDivergente) ||
-    bool(op.statusSaidaInconsistente) ||
-    (tipo === "Transbordo" &&
-      (bool(op.horarioChegadaDivergente) || bool(op.statusChegadaInconsistente)));
-
-  const emAtencao =
-    (saiu && (gps!.gpsDesatualizado || gps!.paradaProlongada)) ||
-    saidaStatus === "atraso_alto" ||
-    divergencia ||
-    (saiu && !slaConfiavel);
+  // Saída medida por GPS: o horário e o atraso já estão congelados.
+  const registroTravado = bool(op.registroTravado) || !!txt(op.dataHoraSaida);
+  const slaConfiavel = op.slaSaidaConfiavel === true || registroTravado;
 
   const horaSaida = txt(op.horaSaida) || horaDeIso(op.dataHoraSaida);
   const horaChegada = txt(op.horaChegada) || horaDeIso(op.dataHoraChegada);
@@ -194,81 +209,78 @@ function fromOperacao(
     transportadora: txt(op.transportadora) || txt(m?.transportadora) || "—",
     tipo,
     destino: txt(op.destino) || txt(m?.destino) || "—",
-    statusGps,
+    pontoApoio: txt(op.pontoApoio) || null,
+    estado,
     saidaPrevista: txt(op.horarioLimite) || horaDeIso(op.dataHoraPrevistaSaida) || "—",
-    saidaReal: saiu ? (horaSaida ?? null) : (horaSaida ?? null),
+    saidaReal: horaSaida ?? null,
     chegadaTransbordo: tipo === "Transbordo" ? (horaChegada ?? null) : null,
     velocidade: saiu ? (num(m?.velocidade) ?? 0) : 0,
     tempoParadoMin: saiu ? paradoMin : null,
     ultimaPosicao: saiu ? txt(m?.endereco) || "—" : "—",
     latitude: saiu ? num(m?.latitude) : null,
     longitude: saiu ? num(m?.longitude) : null,
-    gpsAtualizadoEm: saiu ? num(m?.gpsIdadeMin) : null,
-    situacao: situacaoDe(saiu, saidaStatus, slaConfiavel),
+    gpsAtualizadoEm: saiu ? gpsIdadeMin : null,
+    situacao: situacaoDe(saiu, saidaStatus, encerrado),
     saiu,
-    chegouTransbordo: tipo === "Transbordo" && chegou,
-    emAtencao,
-    gpsDesatualizado: saiu ? gps!.gpsDesatualizado : false,
-    monitorSituacao: saiu ? gps!.monitorSituacao : null,
+    chegouTransbordo: chegou,
+    emAtencao: estado === "Em atencao" || estado === "Sem sinal" || saidaStatus === "atraso_alto",
+    gpsDesatualizado: estado === "Sem sinal",
+    monitorSituacao: txt(m?.situacao).toUpperCase() || null,
     saidaStatus,
     saidaAtrasoMin: num(op.saidaAtrasoMin),
+    atrasoTexto: txt(op.atrasoTexto) || null,
+    registroTravado,
     slaSaidaConfiavel: slaConfiavel,
     saidaRealIso: txt(op.dataHoraSaida) || null,
     chegadaTransbordoIso: tipo === "Transbordo" ? txt(op.dataHoraChegada) || null : null,
-    horarioSaidaDivergente: bool(op.horarioSaidaDivergente),
-    statusSaidaInconsistente: bool(op.statusSaidaInconsistente),
-    horarioChegadaDivergente: bool(op.horarioChegadaDivergente),
-    statusChegadaInconsistente: bool(op.statusChegadaInconsistente),
-    ...(stopCritMin && paradoMin !== null && paradoMin >= stopCritMin ? { emAtencao: true } : {}),
+    tempoViagemMin: num(op.tempoViagemMin),
+    travaManual: bool(op.travaManual),
   };
 }
 
-/** Transição: enquanto o backend não expõe `operacao`, monta a frota a partir do monitoramento real. */
-function fromMonitoramento(m: GrfMonitoramento, index: number): Vehicle {
+/** Transição: sem `operacao`, monta a frota só com o monitoramento ao vivo. */
+function fromMonitoramento(m: GrfMonitoramento, r: Reguas, index: number): Vehicle {
   const placa = normPlaca(m.placa);
-  const naBase = txt(m.situacao).toUpperCase().includes("NA BASE");
-  const gps: GpsInfo = naBase
-    ? {
-        statusGps: "Na base",
-        gpsDesatualizado: false,
-        paradaProlongada: false,
-        monitorSituacao: txt(m.situacao).toUpperCase() || null,
-      }
-    : gpsInfo(m);
+  const situacaoTxt = txt(m.situacao).toUpperCase();
+  const naBase = situacaoTxt.includes("NA BASE");
   const saiu = !naBase;
+  const paradoMin = num(m.paradoMin);
+  const gpsIdadeMin = num(m.gpsIdadeMin);
+  const estado = estadoDe(saiu, false, gpsIdadeMin, paradoMin, r);
+
   return {
     id: `${placa}-m${index}`,
     placa: placa || "—",
     motorista: "—",
     transportadora: txt(m.transportadora) || "—",
-    tipo: tipoPorDestinoFallback(m.destino),
+    tipo: tipoDe(null, m.destino),
     destino: txt(m.destino) || "—",
-
-    statusGps: gps.statusGps,
+    pontoApoio: null,
+    estado,
     saidaPrevista: "—",
     saidaReal: null,
     chegadaTransbordo: null,
     velocidade: num(m.velocidade) ?? 0,
-    tempoParadoMin: num(m.paradoMin),
+    tempoParadoMin: paradoMin,
     ultimaPosicao: txt(m.endereco) || "—",
     latitude: num(m.latitude),
     longitude: num(m.longitude),
-    gpsAtualizadoEm: num(m.gpsIdadeMin),
+    gpsAtualizadoEm: gpsIdadeMin,
     situacao: saiu ? "Conferir horario" : "Aguardando saida",
     saiu,
     chegouTransbordo: false,
-    emAtencao: saiu && (gps.gpsDesatualizado || gps.paradaProlongada),
-    gpsDesatualizado: saiu && gps.gpsDesatualizado,
-    monitorSituacao: gps.monitorSituacao,
+    emAtencao: estado === "Em atencao" || estado === "Sem sinal",
+    gpsDesatualizado: estado === "Sem sinal",
+    monitorSituacao: situacaoTxt || null,
     saidaStatus: saiu ? "registrada" : "pendente",
     saidaAtrasoMin: null,
+    atrasoTexto: null,
+    registroTravado: false,
     slaSaidaConfiavel: false,
     saidaRealIso: null,
     chegadaTransbordoIso: null,
-    horarioSaidaDivergente: false,
-    statusSaidaInconsistente: false,
-    horarioChegadaDivergente: false,
-    statusChegadaInconsistente: false,
+    tempoViagemMin: null,
+    travaManual: false,
   };
 }
 
@@ -280,22 +292,23 @@ export function buildVehicles(payload: GrfPayload): Vehicle[] {
   });
 
   const operacao = payload.operacao ?? [];
-  const stopCrit = num(payload.stopCritMin) ?? 45;
+  const r = reguasDe(payload);
+  const encerrado = diaEncerrado(payload.dataOperacional);
 
   if (operacao.length) {
     return operacao.map((op, i) =>
-      fromOperacao(op, monitor.get(normPlaca(op.placa ?? op.placaOriginal)), stopCrit, i),
+      fromOperacao(op, monitor.get(normPlaca(op.placa ?? op.placaOriginal)), r, encerrado, i),
     );
   }
-  return (payload.monitoramento ?? []).map((m, i) => fromMonitoramento(m, i));
+  return (payload.monitoramento ?? []).map((m, i) => fromMonitoramento(m, r, i));
 }
 
 export function buildAlerts(vehicles: Vehicle[], payload: GrfPayload): AlertItem[] {
-  const stopCrit = num(payload.stopCritMin) ?? 45;
+  const r = reguasDe(payload);
   const alerts: AlertItem[] = [];
 
   for (const v of vehicles) {
-    if (v.saiu && v.gpsDesatualizado) {
+    if (v.estado === "Sem sinal") {
       alerts.push({
         id: `${v.placa}-gps`,
         categoria: "Critico",
@@ -303,49 +316,50 @@ export function buildAlerts(vehicles: Vehicle[], payload: GrfPayload): AlertItem
         placa: v.placa,
         detalhe:
           v.gpsAtualizadoEm !== null
-            ? `Último sinal há ${v.gpsAtualizadoEm} min`
+            ? `Último sinal há ${fmtDur(v.gpsAtualizadoEm)}`
             : "Sem posição recente",
       });
     }
-    if (v.tempoParadoMin !== null && v.tempoParadoMin >= stopCrit) {
+    if (v.estado === "Em atencao") {
       alerts.push({
         id: `${v.placa}-parada`,
-        categoria: "Atencao",
+        categoria: "Critico",
         titulo: "Parada prolongada",
         placa: v.placa,
-        detalhe: `Parado há ${fmtDur(v.tempoParadoMin)}${v.ultimaPosicao !== "—" ? ` · ${v.ultimaPosicao}` : ""}`,
+        detalhe: `Parado há ${fmtDur(v.tempoParadoMin ?? r.atencaoMin)}${
+          v.ultimaPosicao !== "—" ? ` · ${v.ultimaPosicao}` : ""
+        }`,
       });
     }
-    if (v.slaSaidaConfiavel && v.saidaStatus === "atraso_alto") {
+    if (v.estado === "Parado") {
+      alerts.push({
+        id: `${v.placa}-parado`,
+        categoria: "Atencao",
+        titulo: "Veículo parado",
+        placa: v.placa,
+        detalhe: `Parado há ${fmtDur(v.tempoParadoMin ?? r.paradoMin)}${
+          v.ultimaPosicao !== "—" ? ` · ${v.ultimaPosicao}` : ""
+        }`,
+      });
+    }
+    if (v.saidaStatus === "atraso_alto") {
       alerts.push({
         id: `${v.placa}-atraso`,
         categoria: "Atencao",
         titulo: "Saída atrasada",
         placa: v.placa,
-        detalhe: `Previsto ${v.saidaPrevista} · saiu ${v.saidaReal ?? "—"}`,
+        detalhe: `Limite ${v.saidaPrevista} · saiu ${v.saidaReal ?? "—"}${
+          v.atrasoTexto ? ` (${v.atrasoTexto})` : ""
+        }`,
       });
     }
-    if (v.horarioSaidaDivergente || v.statusSaidaInconsistente) {
+    if (v.saiu && !v.slaSaidaConfiavel) {
       alerts.push({
         id: `${v.placa}-saida-div`,
         categoria: "Informativo",
-        titulo: "Horário divergente",
+        titulo: "Horário a conferir",
         placa: v.placa,
-        detalhe: "Conferir registro de saída",
-      });
-    }
-    if (
-      v.tipo === "Transbordo" &&
-      (v.horarioChegadaDivergente ||
-        v.statusChegadaInconsistente ||
-        (v.chegadaTransbordo !== null && !v.chegouTransbordo))
-    ) {
-      alerts.push({
-        id: `${v.placa}-chegada-div`,
-        categoria: "Informativo",
-        titulo: "Conferir chegada",
-        placa: v.placa,
-        detalhe: "Chegada de transbordo não confirmada",
+        detalhe: "Saída marcada sem horário medido pelo GPS",
       });
     }
   }
@@ -354,14 +368,8 @@ export function buildAlerts(vehicles: Vehicle[], payload: GrfPayload): AlertItem
   return alerts.sort((a, b) => order[a.categoria] - order[b.categoria]);
 }
 
-function fmtDur(min: number) {
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  return h ? `${h}h${String(m).padStart(2, "0")}` : `${m} min`;
-}
-
 export function buildTimeline(vehicles: Vehicle[], payload: GrfPayload): TimelineEvent[] {
-  const stopCrit = num(payload.stopCritMin) ?? 45;
+  const r = reguasDe(payload);
   const items: (TimelineEvent & { ts: number })[] = [];
 
   for (const v of vehicles) {
@@ -377,13 +385,13 @@ export function buildTimeline(vehicles: Vehicle[], payload: GrfPayload): Timelin
       });
     }
     const chegadaTs = isoTime(v.chegadaTransbordoIso);
-    if (v.tipo === "Transbordo" && v.chegouTransbordo && chegadaTs !== null) {
+    if (v.chegouTransbordo && chegadaTs !== null) {
       items.push({
         ts: chegadaTs,
         id: `${v.id}-chegada`,
         hora: horaDeIso(v.chegadaTransbordoIso) ?? "",
         placa: v.placa,
-        evento: `Chegada ao transbordo · ${v.destino}`,
+        evento: `Chegada no ponto de apoio · ${v.pontoApoio ?? v.destino}`,
         tipo: "chegada",
       });
     }
@@ -392,15 +400,16 @@ export function buildTimeline(vehicles: Vehicle[], payload: GrfPayload): Timelin
   for (const m of payload.monitoramento ?? []) {
     const paradoMin = num(m.paradoMin) ?? 0;
     const desde = isoTime(m.paradoDesde);
-    if (paradoMin >= Math.max(stopCrit, 60) && desde !== null) {
+    if (paradoMin >= r.atencaoMin && desde !== null) {
       const placa = normPlaca(m.placa);
-      if (!vehicles.some((v) => v.placa === placa)) continue;
+      const v = vehicles.find((x) => x.placa === placa);
+      if (!v || v.estado !== "Em atencao") continue;
       items.push({
         ts: desde,
         id: `${placa}-parada`,
         hora: horaDeIso(m.paradoDesde) ?? "",
         placa,
-        evento: `Parado há mais de 1h${txt(m.endereco) ? ` (${txt(m.endereco)})` : ""}`,
+        evento: `Parado há ${fmtDur(paradoMin)}${txt(m.endereco) ? ` (${txt(m.endereco)})` : ""}`,
         tipo: "parada",
       });
     }
@@ -410,4 +419,51 @@ export function buildTimeline(vehicles: Vehicle[], payload: GrfPayload): Timelin
     .sort((a, b) => b.ts - a.ts)
     .slice(0, 12)
     .map(({ ts: _ts, ...e }) => e);
+}
+
+function rankingDe(
+  linhas: GrfHistoricoRanking[] | null | undefined,
+  chave: "nome" | "placa",
+): RankingAtraso[] {
+  return (linhas ?? [])
+    .map((l) => {
+      const rotulo = txt(chave === "placa" ? l.placa : l.nome);
+      const saidas = num(l.saidas) ?? 0;
+      const atrasadas = num(l.atrasadas) ?? 0;
+      const noHorario = num(l.noHorario) ?? 0;
+      const detalhe =
+        chave === "placa"
+          ? txt(l.transportadora) || "—"
+          : `${saidas} saída${saidas === 1 ? "" : "s"} medida${saidas === 1 ? "" : "s"}`;
+      return {
+        id: rotulo || `${chave}-${Math.random()}`,
+        rotulo: rotulo || "—",
+        detalhe,
+        saidas,
+        atrasadas,
+        noHorario,
+        atrasoMedioMin: num(l.atrasoMedioMin) ?? 0,
+        atrasoMaxMin: num(l.atrasoMaxMin) ?? 0,
+        pctNoHorario: num(l.pctNoHorario) ?? 0,
+      };
+    })
+    .filter((l) => l.rotulo !== "—" && l.saidas > 0)
+    .sort((a, b) => b.atrasoMedioMin - a.atrasoMedioMin || b.atrasadas - a.atrasadas);
+}
+
+/** Indicador da aba Histórico: quem mais atrasa para sair. */
+export function buildHistorico(payload: GrfPayload): HistoricoIndicador | null {
+  const h = payload.historico;
+  if (!h) return null;
+  const transportadoras = rankingDe(h.transportadoras, "nome");
+  const veiculos = rankingDe(h.veiculos, "placa");
+  if (!transportadoras.length && !veiculos.length) return null;
+  return {
+    dias: num(h.dias) ?? 30,
+    de: txt(h.de) || null,
+    ate: txt(h.ate) || null,
+    totalSaidas: num(h.totalSaidas) ?? 0,
+    transportadoras,
+    veiculos,
+  };
 }

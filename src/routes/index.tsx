@@ -16,6 +16,7 @@ import {
   Route as RouteIcon,
   PieChart,
   History,
+  Timer,
   X,
 } from "lucide-react";
 
@@ -29,6 +30,7 @@ import { DepartureSlaChart } from "@/components/dashboard/DepartureSlaChart";
 import { LiveOperationTable } from "@/components/dashboard/LiveOperationTable";
 import { TransshipmentPanel } from "@/components/dashboard/TransshipmentPanel";
 import { RouteDepartureChart } from "@/components/dashboard/RouteDepartureChart";
+import { DepartureDelayRanking } from "@/components/dashboard/DepartureDelayRanking";
 import { OperationalTimeline } from "@/components/dashboard/OperationalTimeline";
 import { Panel } from "@/components/dashboard/ui-bits";
 import {
@@ -82,13 +84,17 @@ function TorreDeControle() {
   );
 
   const count = (key: KpiKey) => baseFiltered.filter(kpiPredicates[key]).length;
-  const saidos = baseFiltered.filter((v) => v.saiu).length;
-  const pctNoHorario = saidos ? Math.round((count("noHorario") / saidos) * 100) : 0;
+  // Percentual sobre as saídas efetivamente medidas — as que têm registro travado.
+  const medidas = baseFiltered.filter(
+    (v) =>
+      v.saidaStatus === "no_horario" ||
+      v.saidaStatus === "atraso_leve" ||
+      v.saidaStatus === "atraso_alto",
+  ).length;
+  const pctNoHorario = medidas ? Math.round((count("noHorario") / medidas) * 100) : 0;
 
   const placas = new Set(vehicles.map((v) => v.placa));
-  const alerts = live.alerts.filter(
-    (a) => placas.has(a.placa) && !readAlerts.includes(a.id),
-  );
+  const alerts = live.alerts.filter((a) => placas.has(a.placa) && !readAlerts.includes(a.id));
   const timeline = live.timeline.filter((e) => placas.has(e.placa));
 
   const toggleKpi = (key: KpiKey) =>
@@ -107,7 +113,7 @@ function TorreDeControle() {
       key: "noHorario" as const,
       label: "Saíram no horário",
       value: count("noHorario"),
-      hint: "dentro da janela prevista",
+      hint: "registro travado na saída",
       extra: `${pctNoHorario}%`,
       icon: TruckIcon,
       tone: "ok" as const,
@@ -116,7 +122,7 @@ function TorreDeControle() {
       key: "emRota" as const,
       label: "Em rota",
       value: count("emRota"),
-      hint: "veículos em deslocamento",
+      hint: "em movimento agora",
       icon: Navigation,
       tone: "cyan" as const,
     },
@@ -124,7 +130,7 @@ function TorreDeControle() {
       key: "parados" as const,
       label: "Parados",
       value: count("parados"),
-      hint: "veículos sem movimento",
+      hint: "parados há 45 min ou mais",
       icon: PauseCircle,
       tone: "warn" as const,
     },
@@ -132,7 +138,7 @@ function TorreDeControle() {
       key: "atencao" as const,
       label: "Em atenção",
       value: count("atencao"),
-      hint: "necessitam acompanhamento",
+      hint: "parados há mais de 1h",
       icon: TriangleAlert,
       tone: "crit" as const,
     },
@@ -140,7 +146,7 @@ function TorreDeControle() {
       key: "transbordos" as const,
       label: "Transbordos",
       value: count("transbordos"),
-      hint: "operação de apoio",
+      hint: "rotas com ponto de apoio",
       icon: ArrowLeftRight,
       tone: "transfer" as const,
     },
@@ -189,8 +195,7 @@ function TorreDeControle() {
             <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[color-mix(in_oklab,var(--primary)_35%,transparent)] bg-primary-soft px-4 py-2.5">
               <Activity className="size-4 text-primary" />
               <span className="text-sm text-foreground">
-                Filtro ativo:{" "}
-                <span className="font-semibold">{kpiLabels[kpi]}</span> ·{" "}
+                Filtro ativo: <span className="font-semibold">{kpiLabels[kpi]}</span> ·{" "}
                 <span className="tabular">{vehicles.length}</span> veículos
               </span>
               <button
@@ -228,11 +233,7 @@ function TorreDeControle() {
               className="h-[460px] md:h-[600px] xl:h-[760px]"
               bodyClassName="p-0"
             >
-              <LiveMap
-                vehicles={vehicles}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-              />
+              <LiveMap vehicles={vehicles} selectedId={selectedId} onSelect={setSelectedId} />
             </Panel>
 
             <Panel
@@ -293,6 +294,17 @@ function TorreDeControle() {
               <RouteDepartureChart vehicles={vehicles} />
             </Panel>
           </div>
+
+          <Panel
+            title="Quem mais atrasa para sair"
+            subtitle="Histórico consolidado — não depende dos filtros do dia"
+            icon={<Timer className="size-4" />}
+          >
+            <DepartureDelayRanking
+              historico={live.historico}
+              transportadoraFiltro={filters.transportadora}
+            />
+          </Panel>
         </main>
       </div>
     </div>

@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/select";
 import type { Filters } from "@/data/vehicleModel";
 import { statusOptions } from "@/data/vehicleModel";
-import { gpsLabel } from "./ui-bits";
+import { estadoLabel } from "./ui-bits";
 
 function Field({
   label,
@@ -82,7 +82,7 @@ export function FilterBar({
         onChange={(v) => onChange({ ...filters, status: v })}
         options={[
           { value: "todos", label: "Todos" },
-          ...statusOptions.map((s) => ({ value: s, label: gpsLabel(s) })),
+          ...statusOptions.map((s) => ({ value: s, label: estadoLabel(s) })),
         ]}
       />
       <Field

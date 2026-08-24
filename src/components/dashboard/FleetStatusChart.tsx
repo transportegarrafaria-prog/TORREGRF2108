@@ -1,29 +1,25 @@
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
-import type { Vehicle } from "@/data/vehicleModel";
+import {
+  estadoCores,
+  estadoLabels,
+  estadoOrdem,
+  type EstadoFrota,
+  type Vehicle,
+} from "@/data/vehicleModel";
 
+/**
+ * Segue exatamente os cards: cada veículo entra em um único estado,
+ * então a soma das fatias é sempre o total de programados.
+ */
 export function FleetStatusChart({ vehicles }: { vehicles: Vehicle[] }) {
-  let emRota = 0;
-  let parados = 0;
-  let atencao = 0;
-  let naBase = 0;
-  let transbordo = 0;
+  const contagem = new Map<EstadoFrota, number>();
+  for (const v of vehicles) contagem.set(v.estado, (contagem.get(v.estado) ?? 0) + 1);
 
-  for (const v of vehicles) {
-    if (v.statusGps === "Na base" || !v.saiu) naBase += 1;
-    else if (v.emAtencao || v.statusGps === "Em atencao" || v.statusGps === "GPS desatualizado")
-      atencao += 1;
-    else if (v.tipo === "Transbordo") transbordo += 1;
-    else if (v.statusGps === "Parado") parados += 1;
-    else emRota += 1;
-  }
-
-  const data = [
-    { name: "Em rota", value: emRota, color: "var(--ok)" },
-    { name: "Parados", value: parados, color: "var(--primary)" },
-    { name: "Atenção", value: atencao, color: "var(--warn)" },
-    { name: "Na base", value: naBase, color: "var(--subtle)" },
-    { name: "Transbordo", value: transbordo, color: "var(--transfer)" },
-  ];
+  const data = estadoOrdem.map((estado) => ({
+    name: estadoLabels[estado],
+    value: contagem.get(estado) ?? 0,
+    color: estadoCores[estado],
+  }));
   const total = vehicles.length;
   const chartData = data.filter((d) => d.value > 0);
 
@@ -45,6 +41,7 @@ export function FleetStatusChart({ vehicles }: { vehicles: Vehicle[] }) {
                   outerRadius={78}
                   paddingAngle={2}
                   stroke="none"
+                  isAnimationActive={false}
                 >
                   {chartData.map((d) => (
                     <Cell key={d.name} fill={d.color} />
@@ -54,16 +51,17 @@ export function FleetStatusChart({ vehicles }: { vehicles: Vehicle[] }) {
             </ResponsiveContainer>
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
               <span className="tabular text-2xl font-semibold text-foreground">{total}</span>
-              <span className="text-[11px] tracking-[0.08em] text-subtle uppercase">
-                veículos
-              </span>
+              <span className="text-[11px] tracking-[0.08em] text-subtle uppercase">veículos</span>
             </div>
           </>
         )}
       </div>
       <ul className="flex flex-col gap-1.5">
         {data.map((d) => (
-          <li key={d.name} className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3">
+          <li
+            key={d.name}
+            className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3"
+          >
             <span className="size-2 rounded-full" style={{ backgroundColor: d.color }} />
             <span className="truncate text-sm text-muted-foreground">{d.name}</span>
             <span className="tabular text-sm font-medium text-foreground">{d.value}</span>

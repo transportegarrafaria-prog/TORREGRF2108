@@ -1,21 +1,11 @@
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import { useEffect, useMemo } from "react";
-import type { Vehicle } from "@/data/vehicleModel";
-import { gpsLabel } from "./ui-bits";
-
-const colors: Record<string, string> = {
-  "Em rota": "var(--ok)",
-  Parado: "var(--primary)",
-  "Em atencao": "var(--warn)",
-  "GPS desatualizado": "var(--crit)",
-  "Na base": "var(--subtle)",
-};
+import { estadoCores, type Vehicle } from "@/data/vehicleModel";
+import { estadoLabel } from "./ui-bits";
 
 function markerColor(v: Vehicle) {
-  if (v.tipo === "Transbordo" && v.statusGps !== "GPS desatualizado")
-    return "var(--transfer)";
-  return colors[v.statusGps] ?? "var(--primary)";
+  return estadoCores[v.estado] ?? "var(--primary)";
 }
 
 const truckSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 17h4V5H2v12h3"/><path d="M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5v8h1"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>`;
@@ -34,9 +24,7 @@ function truckIcon(v: Vehicle, selected: boolean) {
   });
 }
 
-export function hasCoords(
-  v: Vehicle,
-): v is Vehicle & { latitude: number; longitude: number } {
+export function hasCoords(v: Vehicle): v is Vehicle & { latitude: number; longitude: number } {
   return Number.isFinite(v.latitude) && Number.isFinite(v.longitude);
 }
 
@@ -77,12 +65,7 @@ export function LiveMapCanvas({
 
   return (
     <div className="grf-map h-full w-full">
-      <MapContainer
-        center={[-22.5, -43.1]}
-        zoom={8}
-        scrollWheelZoom
-        className="h-full w-full"
-      >
+      <MapContainer center={[-22.5, -43.1]} zoom={8} scrollWheelZoom className="h-full w-full">
         <TileLayer
           attribution="&copy; OpenStreetMap &copy; CARTO"
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
@@ -108,7 +91,7 @@ export function LiveMapCanvas({
                       className="rounded-md border px-2 py-0.5 text-[11px] font-medium"
                       style={{ color, borderColor: color }}
                     >
-                      {gpsLabel(v.statusGps)}
+                      {estadoLabel(v.estado)}
                     </span>
                   </div>
                   <div className="mt-2 border-t border-border pt-2">
