@@ -588,11 +588,36 @@ function coletarProgramacao_(sheet, col, colTrava) {
     var horaChegadaTexto = col.horaChegada ? String(txt[r][col.horaChegada - 1] || "") : "";
     var horarioLimiteTexto = col.horarioLimite ? String(txt[r][col.horarioLimite - 1] || "").replace(/^'/, "") : "";
 
-    // Carimbo travado: primeiro a coluna Data/Hora, depois o texto da Hora.
-    var carimboSaida = col.dataHoraSaida && dataValida_(raw[r][col.dataHoraSaida - 1]) ? raw[r][col.dataHoraSaida - 1] : null;
-    if (!carimboSaida) carimboSaida = parseHoraComDia_(horaSaidaTexto, dataOperacional);
-    var carimboChegada = col.dataHoraChegada && dataValida_(raw[r][col.dataHoraChegada - 1]) ? raw[r][col.dataHoraChegada - 1] : null;
-    if (!carimboChegada) carimboChegada = parseHoraComDia_(horaChegadaTexto, dataOperacional);
+    var saiuPlanilha = col.saiu ? ehSim_(txt[r][col.saiu - 1]) : false;
+    var chegouPlanilha = col.chegou ? ehSim_(txt[r][col.chegou - 1]) : false;
+
+    // CARIMBO x EDIÇÃO DO OPERADOR
+    //
+    // A coluna Data/Hora é o registro do script; a coluna Hora é o que a
+    // pessoa enxerga e edita. Quando o script escreve, as duas ficam
+    // iguais. Se o texto NÃO bate com o carimbo, quem mexeu foi gente —
+    // e aí quem manda é a pessoa.
+    //
+    // Sem isso o carimbo vencia, a rodada seguinte reescrevia o valor
+    // antigo por cima e a edição "não colava" na planilha.
+    var carimboSaidaCol = col.dataHoraSaida && dataValida_(raw[r][col.dataHoraSaida - 1]) ? raw[r][col.dataHoraSaida - 1] : null;
+    var saidaEditada = !!col.dataHoraSaida && String(horaSaidaTexto).trim() !==
+      (carimboSaidaCol ? formatarHoraComDia_(carimboSaidaCol, dataOperacional) : "");
+    var carimboSaida = carimboSaidaCol && !saidaEditada
+      ? carimboSaidaCol
+      : parseHoraComDia_(horaSaidaTexto, dataOperacional);
+
+    var carimboChegadaCol = col.dataHoraChegada && dataValida_(raw[r][col.dataHoraChegada - 1]) ? raw[r][col.dataHoraChegada - 1] : null;
+    var chegadaEditada = !!col.dataHoraChegada && String(horaChegadaTexto).trim() !==
+      (carimboChegadaCol ? formatarHoraComDia_(carimboChegadaCol, dataOperacional) : "");
+    var carimboChegada = carimboChegadaCol && !chegadaEditada
+      ? carimboChegadaCol
+      : parseHoraComDia_(horaChegadaTexto, dataOperacional);
+
+    // "Saiu? = Não" (ou "Chegou? = Não") escrito à mão desfaz o registro:
+    // é assim que a operação derruba uma detecção errada.
+    if (!saiuPlanilha && carimboSaidaCol) { carimboSaida = null; saidaEditada = true; }
+    if (!chegouPlanilha && carimboChegadaCol) { carimboChegada = null; chegadaEditada = true; }
 
     itens.push({
       linhaPlanilha: r + 2,
@@ -606,16 +631,23 @@ function coletarProgramacao_(sheet, col, colTrava) {
       horarioLimite: horarioLimiteTexto || getHorarioLimite_(destino),
       horarioLimitePlanilha: horarioLimiteTexto,
       travaManual: colTrava ? ehSim_(txt[r][colTrava - 1]) : false,
-      saiuPlanilha: col.saiu ? ehSim_(txt[r][col.saiu - 1]) : false,
+      // linha mexida à mão nesta rodada: vale o que a pessoa escreveu
+      edicaoManual: saidaEditada || chegadaEditada,
+      saidaEditada: saidaEditada,
+      chegadaEditada: chegadaEditada,
+      saiuPlanilha: saiuPlanilha,
       horaSaidaPlanilha: horaSaidaTexto,
-      chegouPlanilha: col.chegou ? ehSim_(txt[r][col.chegou - 1]) : false,
+      chegouPlanilha: chegouPlanilha,
       horaChegadaPlanilha: horaChegadaTexto,
       atrasoPlanilha: col.atraso ? String(txt[r][col.atraso - 1] || "") : "",
       statusGpsPlanilha: col.statusGPS ? String(txt[r][col.statusGPS - 1] || "") : "",
       ultimaPosicaoPlanilha: col.ultimaPosicao ? String(txt[r][col.ultimaPosicao - 1] || "") : "",
       // registro travado
       saidaTravada: carimboSaida,
-      chegadaTravada: carimboChegada
+      chegadaTravada: carimboChegada,
+      // o que está gravado nas colunas-carimbo agora (para sincronizar depois)
+      saidaCarimboColuna: carimboSaidaCol,
+      chegadaCarimboColuna: carimboChegadaCol
     });
   }
 
@@ -773,7 +805,16 @@ function detectarSaidaBase_(eventos, dataOperacional) {
   if (!dentro.length) return null;
 
   var manobraMs = MAX_MANOBRA_MIN * 60000;
-  var posicoes = dentro.map(function(ev) { return { dataHora: parseDataHoraEvento_(ev), naBase: estaNaBase_(ev) }; });
+  var posicoes = dentro.map(function(ev) {
+    return {
+      dataHora: parseDataHoraEvento_(ev),
+      naBase: estaNaBase_(ev),
+      lat: numeroSeguro_(ev.GPSPoint_lat != null ? ev.GPSPoint_lat : ev.Latitude),
+      lon: numeroSeguro_(ev.GPSPoint_lon != null ? ev.GPSPoint_lon : ev.Longitude),
+      velocidade: numeroSeguro_(ev.Speed),
+      emMovimento: semAcento_(ev.StatusCode_desc || ev.Status || "").indexOf("em movimento") !== -1
+    };
+  });
 
   for (var i = 1; i < posicoes.length; i++) {
     if (!(posicoes[i - 1].naBase && !posicoes[i].naBase)) continue;
@@ -789,8 +830,34 @@ function detectarSaidaBase_(eventos, dataOperacional) {
     return posicoes[i].dataHora;
   }
 
-  // Já estava fora da base no começo da janela — trata como já saído.
-  if (!posicoes[0].naBase) return posicoes[0].dataHora;
+  // Nenhuma transição base -> fora dentro da janela.
+  //
+  // Isso pode significar duas coisas MUITO diferentes:
+  //   a) o veículo saiu antes da janela começar e já estava viajando;
+  //   b) o veículo simplesmente está estacionado longe da base — posto,
+  //      pátio, oficina, casa do motorista — e não saiu para lugar nenhum.
+  //
+  // Antes o código assumia sempre (a) e carimbava o primeiro evento da
+  // janela como saída. Foi o que aconteceu com dois veículos parados e
+  // desligados num posto a 10 km da base: o primeiro ponto de GPS depois
+  // das 21h da véspera virou "saída às 21:00", e como 21h é antes do
+  // horário-limite das 06h, ainda apareceram como "No prazo".
+  //
+  // Agora (a) só é aceito com prova de movimento: velocidade acima do
+  // limiar (ou status "em movimento") E deslocamento real em relação ao
+  // ponto onde a janela começou. Parado é parado — não saiu.
+  if (posicoes[0].naBase) return null;
+
+  var partida = posicoes[0];
+  for (var k = 1; k < posicoes.length; k++) {
+    var p = posicoes[k];
+    if (p.naBase) break; // entrou na base: quem vale é a transição, já tratada acima
+    var andando = (p.velocidade !== null && p.velocidade > GPS_STOP_SPEED_KMH) || p.emMovimento;
+    if (!andando) continue;
+    if (partida.lat === null || partida.lon === null || p.lat === null || p.lon === null) continue;
+    if (distanciaMetros_(p.lat, p.lon, partida.lat, partida.lon) <= GPS_STOP_RADIUS_M) continue;
+    return p.dataHora;
+  }
   return null;
 }
 
@@ -958,11 +1025,16 @@ function resolverRegistroDoDia_(item, eventos, agoraMs) {
   var dtChegada = dataValida_(item.chegadaTravada) ? item.chegadaTravada : null;
   var novos = 0;
 
-  if (!item.travaManual && !dtSaida) {
+  // A trava é por campo: corrigir a hora de saída não pode cegar a
+  // detecção da chegada no ponto de apoio, que ainda está por acontecer.
+  var respeitarSaida = item.travaManual || item.saidaEditada;
+  var respeitarChegada = item.travaManual || item.chegadaEditada;
+
+  if (!respeitarSaida && !dtSaida) {
     var det = detectarSaidaBase_(eventos || [], item.dataOperacional);
     if (det && det.getTime() <= agoraMs) { dtSaida = det; novos++; }
   }
-  if (!item.travaManual && item.transbordoCfg && dtSaida && !dtChegada) {
+  if (!respeitarChegada && item.transbordoCfg && dtSaida && !dtChegada) {
     var detCheg = detectarChegadaTransbordo_(eventos || [], item.transbordoCfg, item.dataOperacional, dtSaida);
     if (detCheg && detCheg.getTime() <= agoraMs) { dtChegada = detCheg; novos++; }
   }
@@ -1003,6 +1075,23 @@ function escreverSeMudou_(sheet, linha, coluna, valor, atual) {
   var comparavel = novo.replace(/^'/, "");
   if (String(atual == null ? "" : atual).replace(/^'/, "") === comparavel) return;
   sheet.getRange(linha, coluna).setValue(novo);
+}
+
+/**
+ * Mantém a coluna-carimbo igual ao que ficou valendo na linha.
+ * Grava quando há registro novo, reescreve quando o operador mudou a
+ * hora, e LIMPA quando o registro foi desfeito à mão — sem limpar, a
+ * rodada seguinte leria o carimbo velho e ressuscitaria a detecção.
+ */
+function sincronizarCarimbo_(sheet, linha, coluna, valor, atual) {
+  if (!coluna) return;
+  if (!dataValida_(valor)) {
+    if (dataValida_(atual)) sheet.getRange(linha, coluna).clearContent();
+    return;
+  }
+  // diferença de segundos não conta como mudança
+  if (dataValida_(atual) && Math.abs(atual.getTime() - valor.getTime()) < 60000) return;
+  sheet.getRange(linha, coluna).setValue(valor).setNumberFormat("dd/MM/yyyy HH:mm");
 }
 
 function linhaMonitoramento_(item, resumo) {
@@ -1127,6 +1216,7 @@ function atualizarMonitoramentoGPS() {
     var registrosHistorico = [];
     var agoraMs = Date.now();
     var novosRegistros = 0;
+    var travasNovas = 0;
 
     prog.itens.forEach(function(item) {
       var busca = buscarEventosPlaca_(item.placa, item.transportadora, contexto);
@@ -1149,15 +1239,19 @@ function atualizarMonitoramentoGPS() {
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.saiu, saiu ? "Sim" : "Não", item.saiuPlanilha ? "Sim" : "Não");
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.horaSaida, horaSaidaTexto ? "'" + horaSaidaTexto : "", item.horaSaidaPlanilha ? "'" + item.horaSaidaPlanilha : "");
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.horarioLimite, "'" + item.horarioLimite, item.horarioLimitePlanilha);
-      if (col.dataHoraSaida && dtSaida && !dataValida_(item.saidaTravada)) {
-        progSheet.getRange(item.linhaPlanilha, col.dataHoraSaida).setValue(dtSaida).setNumberFormat("dd/MM/yyyy HH:mm");
-      }
+      sincronizarCarimbo_(progSheet, item.linhaPlanilha, col.dataHoraSaida, dtSaida, item.saidaCarimboColuna);
       if (item.transbordoCfg) {
         escreverSeMudou_(progSheet, item.linhaPlanilha, col.chegou, chegou ? "Sim" : "Não", item.chegouPlanilha ? "Sim" : "Não");
         escreverSeMudou_(progSheet, item.linhaPlanilha, col.horaChegada, horaChegadaTexto ? "'" + horaChegadaTexto : "", item.horaChegadaPlanilha ? "'" + item.horaChegadaPlanilha : "");
-        if (col.dataHoraChegada && dtChegada && !dataValida_(item.chegadaTravada)) {
-          progSheet.getRange(item.linhaPlanilha, col.dataHoraChegada).setValue(dtChegada).setNumberFormat("dd/MM/yyyy HH:mm");
-        }
+        sincronizarCarimbo_(progSheet, item.linhaPlanilha, col.dataHoraChegada, dtChegada, item.chegadaCarimboColuna);
+      }
+
+      // Edição à mão vira trava permanente do dia. Sem isso ela valeria
+      // só nesta rodada: na próxima o texto e o carimbo já estariam
+      // iguais de novo e a detecção voltaria a sobrescrever.
+      if (item.edicaoManual && !item.travaManual && colTrava) {
+        progSheet.getRange(item.linhaPlanilha, colTrava).setValue("S");
+        travasNovas++;
       }
       var atrasoTexto = saiu || status !== "Não saiu" ? formatarAtraso_(atrasoMin) : "Não saiu";
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.atraso, atrasoTexto, item.atrasoPlanilha);
@@ -1180,7 +1274,9 @@ function atualizarMonitoramentoGPS() {
     sincronizarHistorico_(ss, registrosHistorico);
     SpreadsheetApp.flush();
 
-    Logger.log("Monitoramento atualizado: " + linhasMonitor.length + " veículos, " + novosRegistros + " registro(s) novo(s) travado(s).");
+    Logger.log("Monitoramento atualizado: " + linhasMonitor.length + " veículos, "
+      + novosRegistros + " registro(s) novo(s) travado(s), "
+      + travasNovas + " linha(s) travada(s) por edição manual.");
   } finally {
     lock.releaseLock();
   }
@@ -1320,7 +1416,7 @@ function montarOperacaoDaProgramacao_(prog, monitoramento) {
       saiu: saiu,
       horaSaida: reg.horaSaidaTexto || null,
       dataHoraSaida: isoOuNull_(dtSaida),
-      fonteHoraSaida: item.travaManual ? "manual" : (dtSaida ? "gps" : "planilha"),
+      fonteHoraSaida: (item.travaManual || item.edicaoManual) ? "manual" : (dtSaida ? "gps" : "planilha"),
       horarioSaidaDivergente: false,
       statusSaidaInconsistente: saiu && !dtSaida,
       slaSaidaConfiavel: !!dtSaida,
@@ -1331,7 +1427,7 @@ function montarOperacaoDaProgramacao_(prog, monitoramento) {
       chegou: chegou,
       horaChegada: reg.horaChegadaTexto || null,
       dataHoraChegada: isoOuNull_(dtChegada),
-      fonteHoraChegada: item.travaManual ? "manual" : (dtChegada ? "gps" : "planilha"),
+      fonteHoraChegada: (item.travaManual || item.edicaoManual) ? "manual" : (dtChegada ? "gps" : "planilha"),
       horarioChegadaDivergente: false,
       statusChegadaInconsistente: !!item.transbordoCfg && chegou && !dtChegada,
       tempoViagemMin: dtSaida && dtChegada ? Math.round((dtChegada.getTime() - dtSaida.getTime()) / 60000) : null,

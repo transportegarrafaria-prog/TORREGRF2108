@@ -241,6 +241,129 @@ console.log("\n7.2) TRAVAMENTO — chegada no ponto de apoio");
   ok("veículo que chegou fica Concluído", estadoOperacional_(r2.saiu, r2.chegou, 3, 600) === ESTADO_CONCLUIDO);
 }
 
+console.log("\n7.3) SAÍDA FALSA — veículo parado fora da base não saiu");
+{
+  // Caso real: HJL5J40 e LSB2J94 passaram a noite no Posto Limoeiro, a 10 km
+  // da base, motor desligado, mesma coordenada. O primeiro ponto de GPS depois
+  // das 21h da véspera virava "saída", e como 21h < 06h do limite, ainda
+  // aparecia como "No prazo".
+  const LIMOEIRO = { GPSPoint_lat: -22.14359, GPSPoint_lon: -43.2848, Geozone: "posto_limoeiro", Address: "Posto Limoeiro" };
+  const parado = [];
+  for (let m = 5; m <= 125; m += 6) {
+    const t = new Date(2026, 7, 24, 20, m, 32);
+    parado.push(ev(2026, 8, 24, t.getHours(), t.getMinutes(), Object.assign({ Speed: 0, StatusCode_desc: "Desligado" }, LIMOEIRO)));
+  }
+  const DIA25 = new Date(2026, 7, 25, 12, 0, 0);
+
+  ok("nenhum evento está dentro da cerca da base", !parado.some((e) => estaNaBase_(e)));
+  const dt = detectarSaidaBase_(parado, DIA25);
+  ok("parado fora da base NÃO gera saída", dt === null, dt);
+
+  // mas um veículo que já estava viajando quando a janela abriu ainda é pego
+  const viajando = [
+    ev(2026, 8, 24, 21, 10, { GPSPoint_lat: -22.3, GPSPoint_lon: -43.5, Geozone: "", Speed: 70, StatusCode_desc: "Em Movimento" }),
+    ev(2026, 8, 24, 21, 40, { GPSPoint_lat: -22.4, GPSPoint_lon: -43.6, Geozone: "", Speed: 68, StatusCode_desc: "Em Movimento" }),
+    ev(2026, 8, 25, 1, 0, { GPSPoint_lat: -22.6, GPSPoint_lon: -43.8, Geozone: "", Speed: 65, StatusCode_desc: "Em Movimento" }),
+  ];
+  const dtViagem = detectarSaidaBase_(viajando, DIA25);
+  ok("veículo em movimento fora da base continua sendo pego", dtViagem !== null, dtViagem);
+
+  // e a transição normal a partir da base segue funcionando
+  const normal = [
+    ev(2026, 8, 25, 2, 0),
+    ev(2026, 8, 25, 5, 30, Object.assign({}, FORA)),
+    ev(2026, 8, 25, 6, 30, Object.assign({}, FORA)),
+  ];
+  const dtNormal = detectarSaidaBase_(normal, DIA25);
+  ok("transição base -> fora continua detectando", dtNormal && dtNormal.getHours() === 5 && dtNormal.getMinutes() === 30, dtNormal);
+}
+
+console.log("\n7.4) EDIÇÃO MANUAL — a planilha aceita o que a operação escreve");
+{
+  // Planilha de mentira com as mesmas colunas da Programação real.
+  const CAB = ["Data", "Placa", "Cidade/Rota", "Transportadora", "Saiu?", "Hora Saída",
+    "Horário-Limite", "Atraso", "Chegou?", "Hora Chegada", "Status GPS", "Última Posição",
+    "ID Viagem", "Data/Hora Saída", "Data/Hora Chegada", "Trava Manual"];
+  const carimbo = new Date(2026, 7, 24, 21, 0, 32);
+
+  function linha(placa, saiu, horaSaida, dataHoraSaida) {
+    return ["25/08/2026", placa, "PETROPOLIS", "115592 TRANS SUL", saiu, horaSaida,
+      "06:00", "", "", "", "", "", "", dataHoraSaida, "", ""];
+  }
+  const linhas = [
+    linha("HJL5J40", "Sim", "21:00 (24/08)", carimbo),   // como o script deixou
+    linha("LSB2J94", "Sim", "06:15", carimbo),           // operação corrigiu a HORA
+    linha("KYG9099", "Não", "", carimbo),                // operação DESFEZ a saída
+  ];
+
+  const mat = [CAB].concat(linhas);
+  const mostrar = (v) => (v instanceof Date ? "25/08/2026 21:00" : String(v == null ? "" : v));
+  const sheet = {
+    getLastRow: () => mat.length,
+    getLastColumn: () => CAB.length,
+    getRange: (r, c, nr, nc) => ({
+      getValues: () => mat.slice(r - 1, r - 1 + nr).map((row) => row.slice(c - 1, c - 1 + nc)),
+      getDisplayValues: () => mat.slice(r - 1, r - 1 + nr).map((row) => row.slice(c - 1, c - 1 + nc).map(mostrar)),
+    }),
+  };
+
+  const col = mapearColunasProgramacao_(sheet);
+  ok("achou a coluna Data/Hora Saída", col.dataHoraSaida === 14, col.dataHoraSaida);
+  const prog = coletarProgramacao_(sheet, col, 16);
+  ok("leu as 3 linhas de 25/08", prog.itens.length === 3, prog.itens.length);
+
+  const [intacta, corrigida, desfeita] = prog.itens;
+  const agora = new Date(2026, 7, 25, 12, 0, 0).getTime();
+
+  // eventos que FARIAM o script detectar uma saída, para provar que ele não sobrescreve
+  const tentaria = [ev(2026, 8, 25, 3, 0), ev(2026, 8, 25, 4, 0, FORA), ev(2026, 8, 25, 8, 0, FORA)];
+
+  ok("linha intacta não é vista como editada", intacta.edicaoManual === false);
+  const r1 = resolverRegistroDoDia_(intacta, tentaria, agora);
+  ok("linha intacta mantém o carimbo do script", r1.horaSaidaTexto === "21:00 (24/08)", r1.horaSaidaTexto);
+
+  ok("hora corrigida é vista como edição manual", corrigida.edicaoManual === true);
+  const r2 = resolverRegistroDoDia_(corrigida, tentaria, agora);
+  ok("vale a hora digitada (06:15), não o carimbo", r2.horaSaidaTexto === "06:15", r2.horaSaidaTexto);
+  ok("detecção NÃO sobrescreve a edição", r2.novosRegistros === 0);
+  ok("atraso recalculado sobre a hora digitada", r2.atrasoMin === 15, r2.atrasoMin);
+  ok("classificada como atraso leve", r2.saidaStatus === "atraso_leve", r2.saidaStatus);
+
+  ok('"Saiu? = Não" é visto como edição manual', desfeita.edicaoManual === true);
+  const r3 = resolverRegistroDoDia_(desfeita, tentaria, agora);
+  ok("saída desfeita: volta a não ter saído", r3.saiu === false && r3.dtSaida === null);
+  ok("detecção NÃO ressuscita a saída desfeita", r3.novosRegistros === 0);
+  ok("carimbo será limpo na escrita", desfeita.saidaCarimboColuna !== null && r3.dtSaida === null);
+}
+
+console.log("\n7.5) A trava é por campo, não pela linha inteira");
+{
+  // Corrigir a hora de SAÍDA à mão não pode cegar a detecção da CHEGADA
+  // no ponto de apoio, que ainda está por acontecer.
+  const penha = TRANSBORDOS[0];
+  const dentroPA = { GPSPoint_lat: penha.lat, GPSPoint_lon: penha.lon, Geozone: "", Speed: 0 };
+  const item = {
+    dataOperacional: DIA,
+    horarioLimite: "03:00",
+    transbordoCfg: penha,
+    travaManual: false,
+    saidaEditada: true,   // operação corrigiu a hora de saída
+    chegadaEditada: false,
+    edicaoManual: true,
+    saiuPlanilha: true,
+    horaSaidaPlanilha: "02:45",
+    chegouPlanilha: false,
+    horaChegadaPlanilha: "",
+    saidaTravada: new Date(2026, 7, 21, 2, 45),
+    chegadaTravada: null,
+  };
+  const eventos = [ev(2026, 8, 21, 3, 0, FORA), ev(2026, 8, 21, 7, 10, dentroPA)];
+  const r = resolverRegistroDoDia_(item, eventos, new Date(2026, 7, 21, 23, 0, 0).getTime());
+  ok("hora de saída editada é preservada", r.horaSaidaTexto === "02:45", r.horaSaidaTexto);
+  ok("chegada no PA continua sendo detectada", r.horaChegadaTexto === "07:10", r.horaChegadaTexto);
+  ok("saiu no prazo pela hora digitada", r.saidaStatus === "no_horario");
+}
+
 console.log("\n8) Horário-limite por rota");
 {
   ok("LAGOS -> 00:00", getHorarioLimite_("LAGOS") === "00:00");

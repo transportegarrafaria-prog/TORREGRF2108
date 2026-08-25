@@ -18,9 +18,33 @@ consulta. Agora o registro do dia é **travado**:
 | Atraso | calculado contra o horário-limite da rota no instante da saída — congela junto |
 | Saiu no horário | derivado do atraso congelado, então também não muda |
 
-O único momento em que um registro travado é apagado é a virada da data
-operacional (a Programação passa a ter um dia novo). Para refazer a detecção
-do dia atual de propósito, rode `reabrirRegistrosDoDia()`.
+O único momento em que um registro travado é apagado sozinho é a virada da
+data operacional (a Programação passa a ter um dia novo). Para refazer a
+detecção do dia atual de propósito, rode `reabrirRegistrosDoDia()`.
+
+## Corrigindo um registro na mão
+
+A operação tem a palavra final. O que você escreve na Programação vence a
+detecção do GPS:
+
+| Para… | Faça isto na Programação |
+|---|---|
+| Corrigir a hora de saída | escreva a hora certa em **Hora Saída** (`06:15`, ou `22:40 (24/08)` se foi na véspera) |
+| Derrubar uma saída que não aconteceu | ponha **Saiu? = Não** |
+| Corrigir a chegada no ponto de apoio | escreva em **Hora Chegada** |
+| Derrubar uma chegada errada | ponha **Chegou? = Não** |
+
+Na rodada seguinte o script reconhece a edição, ajusta a coluna-carimbo
+correspondente e marca a linha como travada — a partir daí ele não mexe mais
+naquele campo até virar o dia. O painel passa a mostrar o seu valor na
+atualização seguinte, e o atraso é recalculado em cima da hora que você
+escreveu.
+
+A trava é **por campo**: corrigir a hora de saída de um transbordo não impede
+o script de detectar a chegada no ponto de apoio depois.
+
+Para devolver uma linha ao controle do GPS, apague a marca da coluna oculta
+`Trava Manual` (ou rode `liberarTravas()` para soltar todas).
 
 ## Estados operacionais (a régua dos cards)
 
@@ -39,6 +63,22 @@ saem os cards, o gráfico de Status da Frota e o Cumprimento das Saídas:
 Transbordo que chegou no PA sai de "parado"/"em atenção" — ele terminou a
 viagem, não está com problema. As réguas ficam em `GPS_STOP_CRIT_MIN` (45) e
 `GPS_ATENCAO_MIN` (60) e vão no payload para o painel usar as mesmas.
+
+## O que conta como saída
+
+Saída é a **transição de dentro para fora da cerca da base** dentro da janela
+do dia, que não volta em até `MAX_MANOBRA_MIN` (manobra e balança não contam).
+
+Quando não existe essa transição na janela, o veículo pode ter saído antes de
+a janela abrir — ou pode estar apenas estacionado longe da base. Os dois casos
+se parecem no GPS, então o segundo só é aceito como saída **com prova de
+movimento**: velocidade acima do limiar e deslocamento real em relação ao
+ponto onde a janela abriu.
+
+Sem essa exigência, dois veículos que passaram a noite num posto a 10 km da
+base, com o motor desligado e a mesma coordenada, tiveram o primeiro ponto de
+GPS depois das 21h da véspera registrado como "saída às 21:00" — e, como 21h
+vem antes do limite das 06h, ainda apareceram como "No prazo".
 
 ## Como publicar
 
