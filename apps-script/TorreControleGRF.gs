@@ -1098,8 +1098,15 @@ function resolverRegistroDoDia_(item, eventos, agoraMs) {
     dtChegada: dtChegada,
     saiu: saiu,
     chegou: chegou,
-    horaSaidaTexto: dtSaida ? formatarHoraComDia_(dtSaida, item.dataOperacional) : item.horaSaidaPlanilha,
-    horaChegadaTexto: dtChegada ? formatarHoraComDia_(dtChegada, item.dataOperacional) : item.horaChegadaPlanilha,
+    // Sem saída, a hora tem que sair junto. Se ela ficasse na célula, a
+    // rodada seguinte a leria de volta como carimbo e a saída desfeita
+    // pela operação ressuscitaria sozinha no ciclo seguinte.
+    horaSaidaTexto: dtSaida
+      ? formatarHoraComDia_(dtSaida, item.dataOperacional)
+      : (saiu ? item.horaSaidaPlanilha : ""),
+    horaChegadaTexto: dtChegada
+      ? formatarHoraComDia_(dtChegada, item.dataOperacional)
+      : (chegou ? item.horaChegadaPlanilha : ""),
     atrasoMin: atrasoMin,
     saidaStatus: saidaStatusDe_(saiu, dtSaida ? atrasoMin : null),
     status: statusPrazo_(saiu, atrasoMin, diaFechado),
@@ -1691,7 +1698,7 @@ function diagnosticarDeteccaoDoDia() {
 
   var contexto = { cookies: {}, mapaConta: getMapaContaPlaca_() };
   var agoraMs = Date.now();
-  var resumo = { detectada: 0, travada: 0, semHora: 0, naBase: 0, semGps: 0 };
+  var resumo = { detectada: 0, travada: 0, travadaSemRegistro: 0, semHora: 0, naBase: 0, semGps: 0 };
 
   prog.itens.forEach(function(item) {
     var linhas = [item.placa + "  (" + item.destino + ")"];
@@ -1700,6 +1707,17 @@ function diagnosticarDeteccaoDoDia() {
       linhas.push("  JÁ TRAVADA em " + Utilities.formatDate(item.saidaTravada, GPS_TZ, "dd/MM HH:mm")
         + (item.travaManual ? " (trava manual)" : ""));
       resumo.travada++;
+      Logger.log(linhas.join("\n"));
+      return;
+    }
+
+    // Trava sem registro nenhum: a detecção está DESLIGADA nesta linha e
+    // ela nunca vai registrar saída sozinha. É o que explica um veículo
+    // que rodou mas ficou como "Não" na planilha.
+    if (item.travaManual) {
+      linhas.push("  TRAVADA SEM REGISTRO — a detecção está desligada nesta linha.");
+      linhas.push("  -> apague a marca da coluna oculta 'Trava Manual' (ou rode liberarTravas())");
+      resumo.travadaSemRegistro++;
       Logger.log(linhas.join("\n"));
       return;
     }
@@ -1750,7 +1768,12 @@ function diagnosticarDeteccaoDoDia() {
   Logger.log("");
   Logger.log("RESUMO: " + resumo.detectada + " com hora detectada, " + resumo.travada + " já travadas, "
     + resumo.semHora + " saíram sem hora, " + resumo.naBase + " na base/não saíram, "
-    + resumo.semGps + " sem GPS.");
+    + resumo.semGps + " sem GPS, " + resumo.travadaSemRegistro + " travadas sem registro.");
+  if (resumo.travadaSemRegistro) {
+    Logger.log("");
+    Logger.log("ATENÇÃO: " + resumo.travadaSemRegistro + " linha(s) estão travadas sem nenhum registro."
+      + " Elas nunca vão detectar saída. Rode liberarTravas() para soltar todas.");
+  }
 }
 
 function verCabecalhosProgramacao() {

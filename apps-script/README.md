@@ -133,11 +133,15 @@ nova versão" para a URL não mudar.
 A lógica pura (detecção, travamento, atraso, estados) roda fora do Google:
 
 ```sh
-node apps-script/tests/logica.test.cjs
+node apps-script/tests/logica.test.cjs    # detecção, travamento, atraso, estados
+node apps-script/tests/escrita.test.cjs   # o que vai parar em cada célula
 ```
 
-O teste carrega o próprio `.gs`, com stubs mínimos do runtime do Apps Script.
-Se você mexer nas regras, rode isso antes de publicar.
+Os dois carregam o próprio `.gs`, com stubs mínimos do runtime do Apps Script.
+O de escrita roda a `atualizarMonitoramentoGPS()` de verdade contra uma
+planilha e um Eclipse simulados e confere célula por célula — é ele que pega
+bug de "detectou mas não gravou". Se você mexer nas regras, rode os dois antes
+de publicar.
 
 ## Colunas usadas na Programação
 
