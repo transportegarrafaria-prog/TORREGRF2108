@@ -636,6 +636,10 @@ function coletarProgramacao_(sheet, col, colTrava) {
       saidaEditada: saidaEditada,
       chegadaEditada: chegadaEditada,
       saiuPlanilha: saiuPlanilha,
+      // texto cru da célula: é com ele que a escrita compara, senão uma
+      // célula apagada à mão nunca mais volta a ser preenchida
+      saiuTextoPlanilha: col.saiu ? String(txt[r][col.saiu - 1] || "") : "",
+      chegouTextoPlanilha: col.chegou ? String(txt[r][col.chegou - 1] || "") : "",
       horaSaidaPlanilha: horaSaidaTexto,
       chegouPlanilha: chegouPlanilha,
       horaChegadaPlanilha: horaChegadaTexto,
@@ -900,6 +904,45 @@ function detectarChegadaTransbordo_(eventos, transbordoCfg, dataOperacional, dat
   return null;
 }
 
+/**
+ * O veículo está fora da base, mas dá para dizer QUANDO saiu?
+ *
+ * O Eclipse devolve no máximo GPS_MONITOR_LIMIT pontos. Num veículo que
+ * registra posição de minuto em minuto enquanto roda, esse log pode não
+ * alcançar mais o momento em que ele cruzou a cerca da base. Aí a
+ * transição some do histórico e a saída deixa de ser detectável.
+ *
+ * A diferença entre "saiu e perdi a hora" e "está estacionado fora da
+ * base e não saiu" está em o log alcançar ou não a abertura da janela:
+ *
+ *   - log começa ANTES da janela abrir: o que ele mostra é confiável.
+ *     Veículo parado fora da base o tempo todo não saiu (foi o caso dos
+ *     que dormiram no Posto Limoeiro).
+ *   - log começa DEPOIS da janela abrir: está truncado. Se o veículo já
+ *     aparece fora da base no primeiro ponto, a saída aconteceu antes —
+ *     existiu, só não dá para cravar a hora.
+ *
+ * No segundo caso a saída é registrada SEM horário: vira "Conferir
+ * horário" no painel, e a operação digita a hora certa na planilha.
+ */
+function saidaForaDaJanela_(eventos, dataOperacional) {
+  var janela = janelaSaida_(dataOperacional);
+  if (!eventos || !eventos.length || !janela) return false;
+
+  var primeiro = parseDataHoraEvento_(eventos[0]);
+  if (!primeiro || primeiro.getTime() <= janela.ini) return false; // log alcança a janela
+
+  for (var i = 0; i < eventos.length; i++) {
+    var t = parseDataHoraEvento_(eventos[i]);
+    if (!t) continue;
+    if (t.getTime() < janela.ini) continue;
+    if (t.getTime() > janela.fim) break;
+    // esteve na base dentro da janela: quem manda é a transição
+    return !estaNaBase_(eventos[i]);
+  }
+  return false;
+}
+
 // Zona atual do Eclipse, para exibição ao vivo no Monitoramento.
 function cercaEletronicaAoVivo_(eventos) {
   var ultimo = eventos[eventos.length - 1];
@@ -1030,16 +1073,19 @@ function resolverRegistroDoDia_(item, eventos, agoraMs) {
   var respeitarSaida = item.travaManual || item.saidaEditada;
   var respeitarChegada = item.travaManual || item.chegadaEditada;
 
+  var saiuSemHora = false;
   if (!respeitarSaida && !dtSaida) {
     var det = detectarSaidaBase_(eventos || [], item.dataOperacional);
     if (det && det.getTime() <= agoraMs) { dtSaida = det; novos++; }
+    // sem hora detectável, mas o log prova que ele não está mais na base
+    else if (saidaForaDaJanela_(eventos || [], item.dataOperacional)) saiuSemHora = true;
   }
   if (!respeitarChegada && item.transbordoCfg && dtSaida && !dtChegada) {
     var detCheg = detectarChegadaTransbordo_(eventos || [], item.transbordoCfg, item.dataOperacional, dtSaida);
     if (detCheg && detCheg.getTime() <= agoraMs) { dtChegada = detCheg; novos++; }
   }
 
-  var saiu = !!dtSaida || item.saiuPlanilha;
+  var saiu = !!dtSaida || item.saiuPlanilha || saiuSemHora;
   var chegou = !!dtChegada || (item.transbordoCfg ? item.chegouPlanilha : false);
 
   var atrasoMin;
@@ -1236,12 +1282,12 @@ function atualizarMonitoramentoGPS() {
       var status = reg.status;
 
       // --- escrita na Programação (só o que mudou) ---
-      escreverSeMudou_(progSheet, item.linhaPlanilha, col.saiu, saiu ? "Sim" : "Não", item.saiuPlanilha ? "Sim" : "Não");
+      escreverSeMudou_(progSheet, item.linhaPlanilha, col.saiu, saiu ? "Sim" : "Não", item.saiuTextoPlanilha);
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.horaSaida, horaSaidaTexto ? "'" + horaSaidaTexto : "", item.horaSaidaPlanilha ? "'" + item.horaSaidaPlanilha : "");
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.horarioLimite, "'" + item.horarioLimite, item.horarioLimitePlanilha);
       sincronizarCarimbo_(progSheet, item.linhaPlanilha, col.dataHoraSaida, dtSaida, item.saidaCarimboColuna);
       if (item.transbordoCfg) {
-        escreverSeMudou_(progSheet, item.linhaPlanilha, col.chegou, chegou ? "Sim" : "Não", item.chegouPlanilha ? "Sim" : "Não");
+        escreverSeMudou_(progSheet, item.linhaPlanilha, col.chegou, chegou ? "Sim" : "Não", item.chegouTextoPlanilha);
         escreverSeMudou_(progSheet, item.linhaPlanilha, col.horaChegada, horaChegadaTexto ? "'" + horaChegadaTexto : "", item.horaChegadaPlanilha ? "'" + item.horaChegadaPlanilha : "");
         sincronizarCarimbo_(progSheet, item.linhaPlanilha, col.dataHoraChegada, dtChegada, item.chegadaCarimboColuna);
       }
@@ -1620,6 +1666,91 @@ function testarHistorico() {
     Logger.log("  " + v.placa + " (" + v.transportadora + ") -> média +" + v.atrasoMedioMin + "min | pior +" + v.atrasoMaxMin + "min (" + v.saidas + " saídas)");
   });
   return h;
+}
+
+/**
+ * Explica, veículo por veículo, POR QUE a saída foi ou não detectada.
+ * É a função para rodar quando o painel mostra menos saídas do que a
+ * operação viu acontecer. Consulta o Eclipse de verdade, então demora
+ * alguns segundos por placa.
+ */
+function diagnosticarDeteccaoDoDia() {
+  var ss = getPlanilha_();
+  var sheet = getProgramacaoSheet_(ss);
+  garantirColunasCarimbo_(sheet);
+  var col = mapearColunasProgramacao_(sheet);
+  var prog = coletarProgramacao_(sheet, col, garantirColunaTrava_(sheet));
+  if (!prog.itens.length) { Logger.log("Nenhum veículo na Programação."); return; }
+
+  var janela = janelaSaida_(prog.dataOperacional);
+  Logger.log("Data operacional: " + prog.dataAlvo + " | " + prog.itens.length + " veículos");
+  Logger.log("Janela de saída: " + Utilities.formatDate(new Date(janela.ini), GPS_TZ, "dd/MM HH:mm")
+    + " -> " + Utilities.formatDate(new Date(janela.fim), GPS_TZ, "dd/MM HH:mm"));
+  Logger.log("Limite de pontos por placa: " + GPS_MONITOR_LIMIT);
+  Logger.log("");
+
+  var contexto = { cookies: {}, mapaConta: getMapaContaPlaca_() };
+  var agoraMs = Date.now();
+  var resumo = { detectada: 0, travada: 0, semHora: 0, naBase: 0, semGps: 0 };
+
+  prog.itens.forEach(function(item) {
+    var linhas = [item.placa + "  (" + item.destino + ")"];
+
+    if (dataValida_(item.saidaTravada)) {
+      linhas.push("  JÁ TRAVADA em " + Utilities.formatDate(item.saidaTravada, GPS_TZ, "dd/MM HH:mm")
+        + (item.travaManual ? " (trava manual)" : ""));
+      resumo.travada++;
+      Logger.log(linhas.join("\n"));
+      return;
+    }
+
+    var busca = buscarEventosPlaca_(item.placa, item.transportadora, contexto);
+    if (!busca.ok || !busca.eventos.length) {
+      linhas.push("  SEM GPS: " + (busca.erro || "sem eventos"));
+      resumo.semGps++;
+      Logger.log(linhas.join("\n"));
+      return;
+    }
+
+    var evs = busca.eventos;
+    var t0 = parseDataHoraEvento_(evs[0]);
+    var t1 = parseDataHoraEvento_(evs[evs.length - 1]);
+    var alcanca = t0 && t0.getTime() <= janela.ini;
+    linhas.push("  log: " + evs.length + " pontos, de "
+      + Utilities.formatDate(t0, GPS_TZ, "dd/MM HH:mm") + " a "
+      + Utilities.formatDate(t1, GPS_TZ, "dd/MM HH:mm"));
+    linhas.push("  o log alcança a abertura da janela? " + (alcanca ? "sim" : "NÃO (truncado)"));
+
+    var naJanela = evs.filter(function(ev) {
+      var t = parseDataHoraEvento_(ev);
+      return t && t.getTime() >= janela.ini && t.getTime() <= janela.fim;
+    });
+    var dentroBase = naJanela.filter(estaNaBase_).length;
+    linhas.push("  pontos na janela: " + naJanela.length + " | dentro da cerca da base: " + dentroBase);
+
+    var det = detectarSaidaBase_(evs, item.dataOperacional);
+    if (det) {
+      linhas.push("  SAÍDA DETECTADA: " + Utilities.formatDate(det, GPS_TZ, "dd/MM HH:mm"));
+      resumo.detectada++;
+    } else if (saidaForaDaJanela_(evs, item.dataOperacional)) {
+      linhas.push("  SAIU, HORA DESCONHECIDA: fora da base, mas o log não alcança a saída");
+      linhas.push("  -> digite a hora certa em Hora Saída na Programação");
+      resumo.semHora++;
+    } else if (dentroBase) {
+      linhas.push("  NA BASE: ainda não cruzou a cerca");
+      resumo.naBase++;
+    } else {
+      linhas.push("  NÃO SAIU: fora da base, mas parado o tempo todo (log cobre a janela)");
+      resumo.naBase++;
+    }
+    Logger.log(linhas.join("\n"));
+  });
+
+  salvarMapaContaPlaca_(contexto.mapaConta);
+  Logger.log("");
+  Logger.log("RESUMO: " + resumo.detectada + " com hora detectada, " + resumo.travada + " já travadas, "
+    + resumo.semHora + " saíram sem hora, " + resumo.naBase + " na base/não saíram, "
+    + resumo.semGps + " sem GPS.");
 }
 
 function verCabecalhosProgramacao() {

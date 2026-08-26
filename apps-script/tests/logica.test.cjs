@@ -364,6 +364,69 @@ console.log("\n7.5) A trava é por campo, não pela linha inteira");
   ok("saiu no prazo pela hora digitada", r.saidaStatus === "no_horario");
 }
 
+console.log("\n7.6) Célula apagada à mão volta a ser preenchida");
+{
+  const escritas = [];
+  const sheet = {
+    getRange: (l, c) => ({
+      setValue: (v) => { escritas.push(`${l}:${c}=${v}`); return { setNumberFormat() {} }; },
+      clearContent: () => escritas.push(`${l}:${c}=<limpo>`),
+    }),
+  };
+  // A operação limpou a coluna "Saiu?". O veículo não saiu: tem que voltar "Não".
+  escritas.length = 0;
+  escreverSeMudou_(sheet, 2, 5, "Não", "");
+  ok("célula vazia recebe 'Não'", escritas.length === 1 && escritas[0] === "2:5=Não", escritas.join());
+
+  // Já está certo: não reescreve (não adianta gastar chamada toda rodada).
+  escritas.length = 0;
+  escreverSeMudou_(sheet, 2, 5, "Não", "Não");
+  ok("valor já correto não é reescrito", escritas.length === 0, escritas.join());
+
+  escritas.length = 0;
+  escreverSeMudou_(sheet, 2, 5, "Sim", "Não");
+  ok("mudança de Não para Sim é escrita", escritas.length === 1, escritas.join());
+}
+
+console.log("\n7.7) Log de GPS truncado — saiu, mas sem hora recuperável");
+{
+  const DIA25 = new Date(2026, 7, 25, 12, 0, 0);
+  const LONGE = { GPSPoint_lat: -22.51, GPSPoint_lon: -43.7, Geozone: "", Address: "Cliente" };
+
+  // Log que só começa às 09:00 — bem depois da janela abrir (21:00 da véspera).
+  // O veículo aparece longe da base e parado: ele saiu, o log é que não alcança.
+  const truncado = [];
+  for (let h = 9; h <= 13; h++) {
+    truncado.push(ev(2026, 8, 25, h, 0, Object.assign({ Speed: 0, StatusCode_desc: "Desligado" }, LONGE)));
+  }
+  ok("nenhuma hora de saída é inventada", detectarSaidaBase_(truncado, DIA25) === null);
+  ok("mas reconhece que saiu", saidaForaDaJanela_(truncado, DIA25) === true);
+
+  const item = {
+    dataOperacional: DIA25, horarioLimite: "06:00", transbordoCfg: null,
+    travaManual: false, saidaEditada: false, chegadaEditada: false,
+    saiuPlanilha: false, horaSaidaPlanilha: "", chegouPlanilha: false, horaChegadaPlanilha: "",
+    saidaTravada: null, chegadaTravada: null,
+  };
+  const r = resolverRegistroDoDia_(item, truncado, new Date(2026, 7, 25, 14, 0, 0).getTime());
+  ok("registra como saído", r.saiu === true);
+  ok("sem hora inventada", r.horaSaidaTexto === "" && r.dtSaida === null, r.horaSaidaTexto);
+  ok("sem atraso inventado", r.atrasoMin === null, r.atrasoMin);
+  ok("cai em 'registrada' -> Conferir horário no painel", r.saidaStatus === "registrada", r.saidaStatus);
+
+  // O caso do Posto Limoeiro NÃO pode cair aqui: o log dele começa ANTES da
+  // janela abrir, então mostra que o veículo já estava parado fora e não saiu.
+  const LIMOEIRO = { GPSPoint_lat: -22.14359, GPSPoint_lon: -43.2848, Geozone: "posto_limoeiro", Address: "Posto Limoeiro" };
+  const parado = [];
+  for (let m = 5; m <= 125; m += 6) {
+    const t = new Date(2026, 7, 24, 20, m, 32);
+    parado.push(ev(2026, 8, 24, t.getHours(), t.getMinutes(), Object.assign({ Speed: 0, StatusCode_desc: "Desligado" }, LIMOEIRO)));
+  }
+  ok("Posto Limoeiro continua NÃO saindo", saidaForaDaJanela_(parado, DIA25) === false);
+  const r2 = resolverRegistroDoDia_(Object.assign({}, item), parado, new Date(2026, 7, 25, 14, 0, 0).getTime());
+  ok("Posto Limoeiro segue como não saído", r2.saiu === false);
+}
+
 console.log("\n8) Horário-limite por rota");
 {
   ok("LAGOS -> 00:00", getHorarioLimite_("LAGOS") === "00:00");

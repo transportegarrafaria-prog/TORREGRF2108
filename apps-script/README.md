@@ -80,6 +80,28 @@ base, com o motor desligado e a mesma coordenada, tiveram o primeiro ponto de
 GPS depois das 21h da véspera registrado como "saída às 21:00" — e, como 21h
 vem antes do limite das 06h, ainda apareceram como "No prazo".
 
+### Saiu, mas sem hora
+
+O Eclipse devolve no máximo `GPS_MONITOR_LIMIT` pontos por placa. Num veículo
+que registra posição de minuto em minuto enquanto roda, esse log pode não
+alcançar mais o instante em que ele cruzou a cerca — a transição some do
+histórico e a saída deixa de ser detectável.
+
+O script separa os dois casos pelo alcance do log:
+
+| O log começa… | Conclusão |
+|---|---|
+| antes da janela abrir | é confiável — parado fora da base significa que não saiu |
+| depois da janela abrir | está truncado — se já aparece fora da base, saiu antes; existiu, mas a hora não dá para cravar |
+
+No segundo caso a saída entra **sem horário**: o painel mostra "Conferir
+horário", sem atraso e sem contar como "no horário". Aí a operação digita a
+hora certa em **Hora Saída** e o registro fecha.
+
+Isso importa quando a Programação é limpa no meio do dia: o registro travado
+some, e para os veículos que já rodaram há horas o log pode não alcançar mais
+a saída. Eles não desaparecem — entram como "saiu, conferir horário".
+
 ## Como publicar
 
 1. Abra a planilha → Extensões → Apps Script.
@@ -104,6 +126,7 @@ nova versão" para a URL não mudar.
 | `testarOperacao()` | o JSON de `operacao` exatamente como o painel recebe |
 | `testarHistorico()` | o ranking de atraso, do pior para o melhor |
 | `diagnosticarPlaca()` | passo a passo de uma placa (edite a constante `PLACA`) |
+| `diagnosticarDeteccaoDoDia()` | **por que cada veículo foi ou não detectado** — rode quando o painel mostrar menos saídas do que a operação viu |
 
 ## Testes
 
