@@ -66,9 +66,17 @@ export function LiveMapCanvas({
   return (
     <div className="grf-map h-full w-full">
       <MapContainer center={[-22.5, -43.1]} zoom={8} scrollWheelZoom className="h-full w-full">
+        {/*
+          Tiles direto do OpenStreetMap: sem chave, sem marca d'água.
+          O CARTO passou a estampar "API KEY REQUIRED" nos basemaps
+          gratuitos, e aparecia por cima do mapa ao dar zoom.
+          Sem {s}: o OSM pede o host único (a./b./c. estão descontinuados).
+          Sem {r}: o servidor padrão não serve tile @2x.
+        */}
         <TileLayer
-          attribution="&copy; OpenStreetMap &copy; CARTO"
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          attribution='&copy; colaboradores do <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+          maxZoom={19}
         />
         <FitBounds vehicles={vehicles} />
         {located.map((v) => {
