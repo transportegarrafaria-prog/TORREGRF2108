@@ -415,9 +415,12 @@ export function buildTimeline(vehicles: Vehicle[], payload: GrfPayload): Timelin
     }
   }
 
+  // Reserva folgada: o corte final para LIMITE_EVENTOS é feito no painel,
+  // DEPOIS de aplicar os filtros — senão um filtro ativo deixaria a lista
+  // com menos eventos do que cabe na tela.
   return items
     .sort((a, b) => b.ts - a.ts)
-    .slice(0, 12)
+    .slice(0, 60)
     .map(({ ts: _ts, ...e }) => e);
 }
 

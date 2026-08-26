@@ -183,6 +183,10 @@ export function destinosDe(vehicles: Vehicle[]): string[] {
 
 export const statusOptions: EstadoFrota[] = estadoOrdem;
 
+/** Quantos cards de alerta e quantos eventos o painel mostra por vez. */
+export const LIMITE_ALERTAS = 10;
+export const LIMITE_EVENTOS = 10;
+
 export interface AlertItem {
   id: string;
   categoria: "Critico" | "Atencao" | "Informativo";

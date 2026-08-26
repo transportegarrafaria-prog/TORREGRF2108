@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import {
   ClipboardCheck,
@@ -38,6 +38,8 @@ import {
   destinosDe,
   emptyFilters,
   estadoParaKpi,
+  LIMITE_ALERTAS,
+  LIMITE_EVENTOS,
   kpiLabels,
   kpiPredicates,
   transportadorasDe,
@@ -96,8 +98,23 @@ function TorreDeControle() {
   const pctNoHorario = medidas ? Math.round((count("noHorario") / medidas) * 100) : 0;
 
   const placas = new Set(vehicles.map((v) => v.placa));
-  const alerts = live.alerts.filter((a) => placas.has(a.placa) && !readAlerts.includes(a.id));
-  const timeline = live.timeline.filter((e) => placas.has(e.placa));
+  const alertasPendentes = live.alerts.filter(
+    (a) => placas.has(a.placa) && !readAlerts.includes(a.id),
+  );
+  const eventosRecentes = live.timeline.filter((e) => placas.has(e.placa));
+  // Cada atualização traz a lista inteira; a tela mostra os mais relevantes.
+  // Alertas já vêm ordenados por gravidade, eventos do mais novo para o mais velho.
+  const alerts = alertasPendentes.slice(0, LIMITE_ALERTAS);
+  const timeline = eventosRecentes.slice(0, LIMITE_EVENTOS);
+
+  // Alerta dispensado volta se a ocorrência acontecer de novo. Sem isso a
+  // dispensa era permanente e a mesma placa nunca mais alertava naquele
+  // motivo, mesmo depois de o problema se repetir.
+  const idsVivos = live.alerts.map((a) => a.id).join("|");
+  useEffect(() => {
+    const vivos = new Set(idsVivos ? idsVivos.split("|") : []);
+    setReadAlerts((r) => (r.every((id) => vivos.has(id)) ? r : r.filter((id) => vivos.has(id))));
+  }, [idsVivos]);
 
   const toggleKpi = (key: KpiKey) =>
     setKpi((c) => (key === "programados" ? null : c === key ? null : key));
@@ -244,7 +261,11 @@ function TorreDeControle() {
 
             <Panel
               title="Alertas operacionais"
-              subtitle={`${alerts.length} ocorrências pendentes`}
+              subtitle={
+                alertasPendentes.length > alerts.length
+                  ? `${alerts.length} de ${alertasPendentes.length} ocorrências pendentes`
+                  : `${alerts.length} ocorrências pendentes`
+              }
               icon={<Bell className="size-4" />}
               bodyClassName="p-3"
             >
@@ -272,6 +293,11 @@ function TorreDeControle() {
             </Panel>
             <Panel
               title="Últimos eventos"
+              subtitle={
+                eventosRecentes.length > timeline.length
+                  ? `os ${timeline.length} mais recentes de ${eventosRecentes.length}`
+                  : `${timeline.length} no dia`
+              }
               icon={<History className="size-4" />}
               className="lg:col-span-2 xl:col-span-1"
             >
