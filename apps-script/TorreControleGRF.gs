@@ -588,11 +588,36 @@ function coletarProgramacao_(sheet, col, colTrava) {
     var horaChegadaTexto = col.horaChegada ? String(txt[r][col.horaChegada - 1] || "") : "";
     var horarioLimiteTexto = col.horarioLimite ? String(txt[r][col.horarioLimite - 1] || "").replace(/^'/, "") : "";
 
-    // Carimbo travado: primeiro a coluna Data/Hora, depois o texto da Hora.
-    var carimboSaida = col.dataHoraSaida && dataValida_(raw[r][col.dataHoraSaida - 1]) ? raw[r][col.dataHoraSaida - 1] : null;
-    if (!carimboSaida) carimboSaida = parseHoraComDia_(horaSaidaTexto, dataOperacional);
-    var carimboChegada = col.dataHoraChegada && dataValida_(raw[r][col.dataHoraChegada - 1]) ? raw[r][col.dataHoraChegada - 1] : null;
-    if (!carimboChegada) carimboChegada = parseHoraComDia_(horaChegadaTexto, dataOperacional);
+    var saiuPlanilha = col.saiu ? ehSim_(txt[r][col.saiu - 1]) : false;
+    var chegouPlanilha = col.chegou ? ehSim_(txt[r][col.chegou - 1]) : false;
+
+    // CARIMBO x EDIÇÃO DO OPERADOR
+    //
+    // A coluna Data/Hora é o registro do script; a coluna Hora é o que a
+    // pessoa enxerga e edita. Quando o script escreve, as duas ficam
+    // iguais. Se o texto NÃO bate com o carimbo, quem mexeu foi gente —
+    // e aí quem manda é a pessoa.
+    //
+    // Sem isso o carimbo vencia, a rodada seguinte reescrevia o valor
+    // antigo por cima e a edição "não colava" na planilha.
+    var carimboSaidaCol = col.dataHoraSaida && dataValida_(raw[r][col.dataHoraSaida - 1]) ? raw[r][col.dataHoraSaida - 1] : null;
+    var saidaEditada = !!col.dataHoraSaida && String(horaSaidaTexto).trim() !==
+      (carimboSaidaCol ? formatarHoraComDia_(carimboSaidaCol, dataOperacional) : "");
+    var carimboSaida = carimboSaidaCol && !saidaEditada
+      ? carimboSaidaCol
+      : parseHoraComDia_(horaSaidaTexto, dataOperacional);
+
+    var carimboChegadaCol = col.dataHoraChegada && dataValida_(raw[r][col.dataHoraChegada - 1]) ? raw[r][col.dataHoraChegada - 1] : null;
+    var chegadaEditada = !!col.dataHoraChegada && String(horaChegadaTexto).trim() !==
+      (carimboChegadaCol ? formatarHoraComDia_(carimboChegadaCol, dataOperacional) : "");
+    var carimboChegada = carimboChegadaCol && !chegadaEditada
+      ? carimboChegadaCol
+      : parseHoraComDia_(horaChegadaTexto, dataOperacional);
+
+    // "Saiu? = Não" (ou "Chegou? = Não") escrito à mão desfaz o registro:
+    // é assim que a operação derruba uma detecção errada.
+    if (!saiuPlanilha && carimboSaidaCol) { carimboSaida = null; saidaEditada = true; }
+    if (!chegouPlanilha && carimboChegadaCol) { carimboChegada = null; chegadaEditada = true; }
 
     itens.push({
       linhaPlanilha: r + 2,
@@ -606,16 +631,27 @@ function coletarProgramacao_(sheet, col, colTrava) {
       horarioLimite: horarioLimiteTexto || getHorarioLimite_(destino),
       horarioLimitePlanilha: horarioLimiteTexto,
       travaManual: colTrava ? ehSim_(txt[r][colTrava - 1]) : false,
-      saiuPlanilha: col.saiu ? ehSim_(txt[r][col.saiu - 1]) : false,
+      // linha mexida à mão nesta rodada: vale o que a pessoa escreveu
+      edicaoManual: saidaEditada || chegadaEditada,
+      saidaEditada: saidaEditada,
+      chegadaEditada: chegadaEditada,
+      saiuPlanilha: saiuPlanilha,
+      // texto cru da célula: é com ele que a escrita compara, senão uma
+      // célula apagada à mão nunca mais volta a ser preenchida
+      saiuTextoPlanilha: col.saiu ? String(txt[r][col.saiu - 1] || "") : "",
+      chegouTextoPlanilha: col.chegou ? String(txt[r][col.chegou - 1] || "") : "",
       horaSaidaPlanilha: horaSaidaTexto,
-      chegouPlanilha: col.chegou ? ehSim_(txt[r][col.chegou - 1]) : false,
+      chegouPlanilha: chegouPlanilha,
       horaChegadaPlanilha: horaChegadaTexto,
       atrasoPlanilha: col.atraso ? String(txt[r][col.atraso - 1] || "") : "",
       statusGpsPlanilha: col.statusGPS ? String(txt[r][col.statusGPS - 1] || "") : "",
       ultimaPosicaoPlanilha: col.ultimaPosicao ? String(txt[r][col.ultimaPosicao - 1] || "") : "",
       // registro travado
       saidaTravada: carimboSaida,
-      chegadaTravada: carimboChegada
+      chegadaTravada: carimboChegada,
+      // o que está gravado nas colunas-carimbo agora (para sincronizar depois)
+      saidaCarimboColuna: carimboSaidaCol,
+      chegadaCarimboColuna: carimboChegadaCol
     });
   }
 
@@ -773,7 +809,16 @@ function detectarSaidaBase_(eventos, dataOperacional) {
   if (!dentro.length) return null;
 
   var manobraMs = MAX_MANOBRA_MIN * 60000;
-  var posicoes = dentro.map(function(ev) { return { dataHora: parseDataHoraEvento_(ev), naBase: estaNaBase_(ev) }; });
+  var posicoes = dentro.map(function(ev) {
+    return {
+      dataHora: parseDataHoraEvento_(ev),
+      naBase: estaNaBase_(ev),
+      lat: numeroSeguro_(ev.GPSPoint_lat != null ? ev.GPSPoint_lat : ev.Latitude),
+      lon: numeroSeguro_(ev.GPSPoint_lon != null ? ev.GPSPoint_lon : ev.Longitude),
+      velocidade: numeroSeguro_(ev.Speed),
+      emMovimento: semAcento_(ev.StatusCode_desc || ev.Status || "").indexOf("em movimento") !== -1
+    };
+  });
 
   for (var i = 1; i < posicoes.length; i++) {
     if (!(posicoes[i - 1].naBase && !posicoes[i].naBase)) continue;
@@ -789,8 +834,34 @@ function detectarSaidaBase_(eventos, dataOperacional) {
     return posicoes[i].dataHora;
   }
 
-  // Já estava fora da base no começo da janela — trata como já saído.
-  if (!posicoes[0].naBase) return posicoes[0].dataHora;
+  // Nenhuma transição base -> fora dentro da janela.
+  //
+  // Isso pode significar duas coisas MUITO diferentes:
+  //   a) o veículo saiu antes da janela começar e já estava viajando;
+  //   b) o veículo simplesmente está estacionado longe da base — posto,
+  //      pátio, oficina, casa do motorista — e não saiu para lugar nenhum.
+  //
+  // Antes o código assumia sempre (a) e carimbava o primeiro evento da
+  // janela como saída. Foi o que aconteceu com dois veículos parados e
+  // desligados num posto a 10 km da base: o primeiro ponto de GPS depois
+  // das 21h da véspera virou "saída às 21:00", e como 21h é antes do
+  // horário-limite das 06h, ainda apareceram como "No prazo".
+  //
+  // Agora (a) só é aceito com prova de movimento: velocidade acima do
+  // limiar (ou status "em movimento") E deslocamento real em relação ao
+  // ponto onde a janela começou. Parado é parado — não saiu.
+  if (posicoes[0].naBase) return null;
+
+  var partida = posicoes[0];
+  for (var k = 1; k < posicoes.length; k++) {
+    var p = posicoes[k];
+    if (p.naBase) break; // entrou na base: quem vale é a transição, já tratada acima
+    var andando = (p.velocidade !== null && p.velocidade > GPS_STOP_SPEED_KMH) || p.emMovimento;
+    if (!andando) continue;
+    if (partida.lat === null || partida.lon === null || p.lat === null || p.lon === null) continue;
+    if (distanciaMetros_(p.lat, p.lon, partida.lat, partida.lon) <= GPS_STOP_RADIUS_M) continue;
+    return p.dataHora;
+  }
   return null;
 }
 
@@ -831,6 +902,45 @@ function detectarChegadaTransbordo_(eventos, transbordoCfg, dataOperacional, dat
     if (parado || (dentroConsec >= 2 && permanenciaMin >= 2)) return t;
   }
   return null;
+}
+
+/**
+ * O veículo está fora da base, mas dá para dizer QUANDO saiu?
+ *
+ * O Eclipse devolve no máximo GPS_MONITOR_LIMIT pontos. Num veículo que
+ * registra posição de minuto em minuto enquanto roda, esse log pode não
+ * alcançar mais o momento em que ele cruzou a cerca da base. Aí a
+ * transição some do histórico e a saída deixa de ser detectável.
+ *
+ * A diferença entre "saiu e perdi a hora" e "está estacionado fora da
+ * base e não saiu" está em o log alcançar ou não a abertura da janela:
+ *
+ *   - log começa ANTES da janela abrir: o que ele mostra é confiável.
+ *     Veículo parado fora da base o tempo todo não saiu (foi o caso dos
+ *     que dormiram no Posto Limoeiro).
+ *   - log começa DEPOIS da janela abrir: está truncado. Se o veículo já
+ *     aparece fora da base no primeiro ponto, a saída aconteceu antes —
+ *     existiu, só não dá para cravar a hora.
+ *
+ * No segundo caso a saída é registrada SEM horário: vira "Conferir
+ * horário" no painel, e a operação digita a hora certa na planilha.
+ */
+function saidaForaDaJanela_(eventos, dataOperacional) {
+  var janela = janelaSaida_(dataOperacional);
+  if (!eventos || !eventos.length || !janela) return false;
+
+  var primeiro = parseDataHoraEvento_(eventos[0]);
+  if (!primeiro || primeiro.getTime() <= janela.ini) return false; // log alcança a janela
+
+  for (var i = 0; i < eventos.length; i++) {
+    var t = parseDataHoraEvento_(eventos[i]);
+    if (!t) continue;
+    if (t.getTime() < janela.ini) continue;
+    if (t.getTime() > janela.fim) break;
+    // esteve na base dentro da janela: quem manda é a transição
+    return !estaNaBase_(eventos[i]);
+  }
+  return false;
 }
 
 // Zona atual do Eclipse, para exibição ao vivo no Monitoramento.
@@ -958,16 +1068,24 @@ function resolverRegistroDoDia_(item, eventos, agoraMs) {
   var dtChegada = dataValida_(item.chegadaTravada) ? item.chegadaTravada : null;
   var novos = 0;
 
-  if (!item.travaManual && !dtSaida) {
+  // A trava é por campo: corrigir a hora de saída não pode cegar a
+  // detecção da chegada no ponto de apoio, que ainda está por acontecer.
+  var respeitarSaida = item.travaManual || item.saidaEditada;
+  var respeitarChegada = item.travaManual || item.chegadaEditada;
+
+  var saiuSemHora = false;
+  if (!respeitarSaida && !dtSaida) {
     var det = detectarSaidaBase_(eventos || [], item.dataOperacional);
     if (det && det.getTime() <= agoraMs) { dtSaida = det; novos++; }
+    // sem hora detectável, mas o log prova que ele não está mais na base
+    else if (saidaForaDaJanela_(eventos || [], item.dataOperacional)) saiuSemHora = true;
   }
-  if (!item.travaManual && item.transbordoCfg && dtSaida && !dtChegada) {
+  if (!respeitarChegada && item.transbordoCfg && dtSaida && !dtChegada) {
     var detCheg = detectarChegadaTransbordo_(eventos || [], item.transbordoCfg, item.dataOperacional, dtSaida);
     if (detCheg && detCheg.getTime() <= agoraMs) { dtChegada = detCheg; novos++; }
   }
 
-  var saiu = !!dtSaida || item.saiuPlanilha;
+  var saiu = !!dtSaida || item.saiuPlanilha || saiuSemHora;
   var chegou = !!dtChegada || (item.transbordoCfg ? item.chegouPlanilha : false);
 
   var atrasoMin;
@@ -980,8 +1098,15 @@ function resolverRegistroDoDia_(item, eventos, agoraMs) {
     dtChegada: dtChegada,
     saiu: saiu,
     chegou: chegou,
-    horaSaidaTexto: dtSaida ? formatarHoraComDia_(dtSaida, item.dataOperacional) : item.horaSaidaPlanilha,
-    horaChegadaTexto: dtChegada ? formatarHoraComDia_(dtChegada, item.dataOperacional) : item.horaChegadaPlanilha,
+    // Sem saída, a hora tem que sair junto. Se ela ficasse na célula, a
+    // rodada seguinte a leria de volta como carimbo e a saída desfeita
+    // pela operação ressuscitaria sozinha no ciclo seguinte.
+    horaSaidaTexto: dtSaida
+      ? formatarHoraComDia_(dtSaida, item.dataOperacional)
+      : (saiu ? item.horaSaidaPlanilha : ""),
+    horaChegadaTexto: dtChegada
+      ? formatarHoraComDia_(dtChegada, item.dataOperacional)
+      : (chegou ? item.horaChegadaPlanilha : ""),
     atrasoMin: atrasoMin,
     saidaStatus: saidaStatusDe_(saiu, dtSaida ? atrasoMin : null),
     status: statusPrazo_(saiu, atrasoMin, diaFechado),
@@ -1003,6 +1128,23 @@ function escreverSeMudou_(sheet, linha, coluna, valor, atual) {
   var comparavel = novo.replace(/^'/, "");
   if (String(atual == null ? "" : atual).replace(/^'/, "") === comparavel) return;
   sheet.getRange(linha, coluna).setValue(novo);
+}
+
+/**
+ * Mantém a coluna-carimbo igual ao que ficou valendo na linha.
+ * Grava quando há registro novo, reescreve quando o operador mudou a
+ * hora, e LIMPA quando o registro foi desfeito à mão — sem limpar, a
+ * rodada seguinte leria o carimbo velho e ressuscitaria a detecção.
+ */
+function sincronizarCarimbo_(sheet, linha, coluna, valor, atual) {
+  if (!coluna) return;
+  if (!dataValida_(valor)) {
+    if (dataValida_(atual)) sheet.getRange(linha, coluna).clearContent();
+    return;
+  }
+  // diferença de segundos não conta como mudança
+  if (dataValida_(atual) && Math.abs(atual.getTime() - valor.getTime()) < 60000) return;
+  sheet.getRange(linha, coluna).setValue(valor).setNumberFormat("dd/MM/yyyy HH:mm");
 }
 
 function linhaMonitoramento_(item, resumo) {
@@ -1127,6 +1269,7 @@ function atualizarMonitoramentoGPS() {
     var registrosHistorico = [];
     var agoraMs = Date.now();
     var novosRegistros = 0;
+    var travasNovas = 0;
 
     prog.itens.forEach(function(item) {
       var busca = buscarEventosPlaca_(item.placa, item.transportadora, contexto);
@@ -1146,18 +1289,22 @@ function atualizarMonitoramentoGPS() {
       var status = reg.status;
 
       // --- escrita na Programação (só o que mudou) ---
-      escreverSeMudou_(progSheet, item.linhaPlanilha, col.saiu, saiu ? "Sim" : "Não", item.saiuPlanilha ? "Sim" : "Não");
+      escreverSeMudou_(progSheet, item.linhaPlanilha, col.saiu, saiu ? "Sim" : "Não", item.saiuTextoPlanilha);
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.horaSaida, horaSaidaTexto ? "'" + horaSaidaTexto : "", item.horaSaidaPlanilha ? "'" + item.horaSaidaPlanilha : "");
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.horarioLimite, "'" + item.horarioLimite, item.horarioLimitePlanilha);
-      if (col.dataHoraSaida && dtSaida && !dataValida_(item.saidaTravada)) {
-        progSheet.getRange(item.linhaPlanilha, col.dataHoraSaida).setValue(dtSaida).setNumberFormat("dd/MM/yyyy HH:mm");
-      }
+      sincronizarCarimbo_(progSheet, item.linhaPlanilha, col.dataHoraSaida, dtSaida, item.saidaCarimboColuna);
       if (item.transbordoCfg) {
-        escreverSeMudou_(progSheet, item.linhaPlanilha, col.chegou, chegou ? "Sim" : "Não", item.chegouPlanilha ? "Sim" : "Não");
+        escreverSeMudou_(progSheet, item.linhaPlanilha, col.chegou, chegou ? "Sim" : "Não", item.chegouTextoPlanilha);
         escreverSeMudou_(progSheet, item.linhaPlanilha, col.horaChegada, horaChegadaTexto ? "'" + horaChegadaTexto : "", item.horaChegadaPlanilha ? "'" + item.horaChegadaPlanilha : "");
-        if (col.dataHoraChegada && dtChegada && !dataValida_(item.chegadaTravada)) {
-          progSheet.getRange(item.linhaPlanilha, col.dataHoraChegada).setValue(dtChegada).setNumberFormat("dd/MM/yyyy HH:mm");
-        }
+        sincronizarCarimbo_(progSheet, item.linhaPlanilha, col.dataHoraChegada, dtChegada, item.chegadaCarimboColuna);
+      }
+
+      // Edição à mão vira trava permanente do dia. Sem isso ela valeria
+      // só nesta rodada: na próxima o texto e o carimbo já estariam
+      // iguais de novo e a detecção voltaria a sobrescrever.
+      if (item.edicaoManual && !item.travaManual && colTrava) {
+        progSheet.getRange(item.linhaPlanilha, colTrava).setValue("S");
+        travasNovas++;
       }
       var atrasoTexto = saiu || status !== "Não saiu" ? formatarAtraso_(atrasoMin) : "Não saiu";
       escreverSeMudou_(progSheet, item.linhaPlanilha, col.atraso, atrasoTexto, item.atrasoPlanilha);
@@ -1180,7 +1327,9 @@ function atualizarMonitoramentoGPS() {
     sincronizarHistorico_(ss, registrosHistorico);
     SpreadsheetApp.flush();
 
-    Logger.log("Monitoramento atualizado: " + linhasMonitor.length + " veículos, " + novosRegistros + " registro(s) novo(s) travado(s).");
+    Logger.log("Monitoramento atualizado: " + linhasMonitor.length + " veículos, "
+      + novosRegistros + " registro(s) novo(s) travado(s), "
+      + travasNovas + " linha(s) travada(s) por edição manual.");
   } finally {
     lock.releaseLock();
   }
@@ -1320,7 +1469,7 @@ function montarOperacaoDaProgramacao_(prog, monitoramento) {
       saiu: saiu,
       horaSaida: reg.horaSaidaTexto || null,
       dataHoraSaida: isoOuNull_(dtSaida),
-      fonteHoraSaida: item.travaManual ? "manual" : (dtSaida ? "gps" : "planilha"),
+      fonteHoraSaida: (item.travaManual || item.edicaoManual) ? "manual" : (dtSaida ? "gps" : "planilha"),
       horarioSaidaDivergente: false,
       statusSaidaInconsistente: saiu && !dtSaida,
       slaSaidaConfiavel: !!dtSaida,
@@ -1331,7 +1480,7 @@ function montarOperacaoDaProgramacao_(prog, monitoramento) {
       chegou: chegou,
       horaChegada: reg.horaChegadaTexto || null,
       dataHoraChegada: isoOuNull_(dtChegada),
-      fonteHoraChegada: item.travaManual ? "manual" : (dtChegada ? "gps" : "planilha"),
+      fonteHoraChegada: (item.travaManual || item.edicaoManual) ? "manual" : (dtChegada ? "gps" : "planilha"),
       horarioChegadaDivergente: false,
       statusChegadaInconsistente: !!item.transbordoCfg && chegou && !dtChegada,
       tempoViagemMin: dtSaida && dtChegada ? Math.round((dtChegada.getTime() - dtSaida.getTime()) / 60000) : null,
@@ -1524,6 +1673,107 @@ function testarHistorico() {
     Logger.log("  " + v.placa + " (" + v.transportadora + ") -> média +" + v.atrasoMedioMin + "min | pior +" + v.atrasoMaxMin + "min (" + v.saidas + " saídas)");
   });
   return h;
+}
+
+/**
+ * Explica, veículo por veículo, POR QUE a saída foi ou não detectada.
+ * É a função para rodar quando o painel mostra menos saídas do que a
+ * operação viu acontecer. Consulta o Eclipse de verdade, então demora
+ * alguns segundos por placa.
+ */
+function diagnosticarDeteccaoDoDia() {
+  var ss = getPlanilha_();
+  var sheet = getProgramacaoSheet_(ss);
+  garantirColunasCarimbo_(sheet);
+  var col = mapearColunasProgramacao_(sheet);
+  var prog = coletarProgramacao_(sheet, col, garantirColunaTrava_(sheet));
+  if (!prog.itens.length) { Logger.log("Nenhum veículo na Programação."); return; }
+
+  var janela = janelaSaida_(prog.dataOperacional);
+  Logger.log("Data operacional: " + prog.dataAlvo + " | " + prog.itens.length + " veículos");
+  Logger.log("Janela de saída: " + Utilities.formatDate(new Date(janela.ini), GPS_TZ, "dd/MM HH:mm")
+    + " -> " + Utilities.formatDate(new Date(janela.fim), GPS_TZ, "dd/MM HH:mm"));
+  Logger.log("Limite de pontos por placa: " + GPS_MONITOR_LIMIT);
+  Logger.log("");
+
+  var contexto = { cookies: {}, mapaConta: getMapaContaPlaca_() };
+  var agoraMs = Date.now();
+  var resumo = { detectada: 0, travada: 0, travadaSemRegistro: 0, semHora: 0, naBase: 0, semGps: 0 };
+
+  prog.itens.forEach(function(item) {
+    var linhas = [item.placa + "  (" + item.destino + ")"];
+
+    if (dataValida_(item.saidaTravada)) {
+      linhas.push("  JÁ TRAVADA em " + Utilities.formatDate(item.saidaTravada, GPS_TZ, "dd/MM HH:mm")
+        + (item.travaManual ? " (trava manual)" : ""));
+      resumo.travada++;
+      Logger.log(linhas.join("\n"));
+      return;
+    }
+
+    // Trava sem registro nenhum: a detecção está DESLIGADA nesta linha e
+    // ela nunca vai registrar saída sozinha. É o que explica um veículo
+    // que rodou mas ficou como "Não" na planilha.
+    if (item.travaManual) {
+      linhas.push("  TRAVADA SEM REGISTRO — a detecção está desligada nesta linha.");
+      linhas.push("  -> apague a marca da coluna oculta 'Trava Manual' (ou rode liberarTravas())");
+      resumo.travadaSemRegistro++;
+      Logger.log(linhas.join("\n"));
+      return;
+    }
+
+    var busca = buscarEventosPlaca_(item.placa, item.transportadora, contexto);
+    if (!busca.ok || !busca.eventos.length) {
+      linhas.push("  SEM GPS: " + (busca.erro || "sem eventos"));
+      resumo.semGps++;
+      Logger.log(linhas.join("\n"));
+      return;
+    }
+
+    var evs = busca.eventos;
+    var t0 = parseDataHoraEvento_(evs[0]);
+    var t1 = parseDataHoraEvento_(evs[evs.length - 1]);
+    var alcanca = t0 && t0.getTime() <= janela.ini;
+    linhas.push("  log: " + evs.length + " pontos, de "
+      + Utilities.formatDate(t0, GPS_TZ, "dd/MM HH:mm") + " a "
+      + Utilities.formatDate(t1, GPS_TZ, "dd/MM HH:mm"));
+    linhas.push("  o log alcança a abertura da janela? " + (alcanca ? "sim" : "NÃO (truncado)"));
+
+    var naJanela = evs.filter(function(ev) {
+      var t = parseDataHoraEvento_(ev);
+      return t && t.getTime() >= janela.ini && t.getTime() <= janela.fim;
+    });
+    var dentroBase = naJanela.filter(estaNaBase_).length;
+    linhas.push("  pontos na janela: " + naJanela.length + " | dentro da cerca da base: " + dentroBase);
+
+    var det = detectarSaidaBase_(evs, item.dataOperacional);
+    if (det) {
+      linhas.push("  SAÍDA DETECTADA: " + Utilities.formatDate(det, GPS_TZ, "dd/MM HH:mm"));
+      resumo.detectada++;
+    } else if (saidaForaDaJanela_(evs, item.dataOperacional)) {
+      linhas.push("  SAIU, HORA DESCONHECIDA: fora da base, mas o log não alcança a saída");
+      linhas.push("  -> digite a hora certa em Hora Saída na Programação");
+      resumo.semHora++;
+    } else if (dentroBase) {
+      linhas.push("  NA BASE: ainda não cruzou a cerca");
+      resumo.naBase++;
+    } else {
+      linhas.push("  NÃO SAIU: fora da base, mas parado o tempo todo (log cobre a janela)");
+      resumo.naBase++;
+    }
+    Logger.log(linhas.join("\n"));
+  });
+
+  salvarMapaContaPlaca_(contexto.mapaConta);
+  Logger.log("");
+  Logger.log("RESUMO: " + resumo.detectada + " com hora detectada, " + resumo.travada + " já travadas, "
+    + resumo.semHora + " saíram sem hora, " + resumo.naBase + " na base/não saíram, "
+    + resumo.semGps + " sem GPS, " + resumo.travadaSemRegistro + " travadas sem registro.");
+  if (resumo.travadaSemRegistro) {
+    Logger.log("");
+    Logger.log("ATENÇÃO: " + resumo.travadaSemRegistro + " linha(s) estão travadas sem nenhum registro."
+      + " Elas nunca vão detectar saída. Rode liberarTravas() para soltar todas.");
+  }
 }
 
 function verCabecalhosProgramacao() {

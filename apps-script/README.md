@@ -18,9 +18,33 @@ consulta. Agora o registro do dia é **travado**:
 | Atraso | calculado contra o horário-limite da rota no instante da saída — congela junto |
 | Saiu no horário | derivado do atraso congelado, então também não muda |
 
-O único momento em que um registro travado é apagado é a virada da data
-operacional (a Programação passa a ter um dia novo). Para refazer a detecção
-do dia atual de propósito, rode `reabrirRegistrosDoDia()`.
+O único momento em que um registro travado é apagado sozinho é a virada da
+data operacional (a Programação passa a ter um dia novo). Para refazer a
+detecção do dia atual de propósito, rode `reabrirRegistrosDoDia()`.
+
+## Corrigindo um registro na mão
+
+A operação tem a palavra final. O que você escreve na Programação vence a
+detecção do GPS:
+
+| Para… | Faça isto na Programação |
+|---|---|
+| Corrigir a hora de saída | escreva a hora certa em **Hora Saída** (`06:15`, ou `22:40 (24/08)` se foi na véspera) |
+| Derrubar uma saída que não aconteceu | ponha **Saiu? = Não** |
+| Corrigir a chegada no ponto de apoio | escreva em **Hora Chegada** |
+| Derrubar uma chegada errada | ponha **Chegou? = Não** |
+
+Na rodada seguinte o script reconhece a edição, ajusta a coluna-carimbo
+correspondente e marca a linha como travada — a partir daí ele não mexe mais
+naquele campo até virar o dia. O painel passa a mostrar o seu valor na
+atualização seguinte, e o atraso é recalculado em cima da hora que você
+escreveu.
+
+A trava é **por campo**: corrigir a hora de saída de um transbordo não impede
+o script de detectar a chegada no ponto de apoio depois.
+
+Para devolver uma linha ao controle do GPS, apague a marca da coluna oculta
+`Trava Manual` (ou rode `liberarTravas()` para soltar todas).
 
 ## Estados operacionais (a régua dos cards)
 
@@ -39,6 +63,44 @@ saem os cards, o gráfico de Status da Frota e o Cumprimento das Saídas:
 Transbordo que chegou no PA sai de "parado"/"em atenção" — ele terminou a
 viagem, não está com problema. As réguas ficam em `GPS_STOP_CRIT_MIN` (45) e
 `GPS_ATENCAO_MIN` (60) e vão no payload para o painel usar as mesmas.
+
+## O que conta como saída
+
+Saída é a **transição de dentro para fora da cerca da base** dentro da janela
+do dia, que não volta em até `MAX_MANOBRA_MIN` (manobra e balança não contam).
+
+Quando não existe essa transição na janela, o veículo pode ter saído antes de
+a janela abrir — ou pode estar apenas estacionado longe da base. Os dois casos
+se parecem no GPS, então o segundo só é aceito como saída **com prova de
+movimento**: velocidade acima do limiar e deslocamento real em relação ao
+ponto onde a janela abriu.
+
+Sem essa exigência, dois veículos que passaram a noite num posto a 10 km da
+base, com o motor desligado e a mesma coordenada, tiveram o primeiro ponto de
+GPS depois das 21h da véspera registrado como "saída às 21:00" — e, como 21h
+vem antes do limite das 06h, ainda apareceram como "No prazo".
+
+### Saiu, mas sem hora
+
+O Eclipse devolve no máximo `GPS_MONITOR_LIMIT` pontos por placa. Num veículo
+que registra posição de minuto em minuto enquanto roda, esse log pode não
+alcançar mais o instante em que ele cruzou a cerca — a transição some do
+histórico e a saída deixa de ser detectável.
+
+O script separa os dois casos pelo alcance do log:
+
+| O log começa… | Conclusão |
+|---|---|
+| antes da janela abrir | é confiável — parado fora da base significa que não saiu |
+| depois da janela abrir | está truncado — se já aparece fora da base, saiu antes; existiu, mas a hora não dá para cravar |
+
+No segundo caso a saída entra **sem horário**: o painel mostra "Conferir
+horário", sem atraso e sem contar como "no horário". Aí a operação digita a
+hora certa em **Hora Saída** e o registro fecha.
+
+Isso importa quando a Programação é limpa no meio do dia: o registro travado
+some, e para os veículos que já rodaram há horas o log pode não alcançar mais
+a saída. Eles não desaparecem — entram como "saiu, conferir horário".
 
 ## Como publicar
 
@@ -64,17 +126,22 @@ nova versão" para a URL não mudar.
 | `testarOperacao()` | o JSON de `operacao` exatamente como o painel recebe |
 | `testarHistorico()` | o ranking de atraso, do pior para o melhor |
 | `diagnosticarPlaca()` | passo a passo de uma placa (edite a constante `PLACA`) |
+| `diagnosticarDeteccaoDoDia()` | **por que cada veículo foi ou não detectado** — rode quando o painel mostrar menos saídas do que a operação viu |
 
 ## Testes
 
 A lógica pura (detecção, travamento, atraso, estados) roda fora do Google:
 
 ```sh
-node apps-script/tests/logica.test.cjs
+node apps-script/tests/logica.test.cjs    # detecção, travamento, atraso, estados
+node apps-script/tests/escrita.test.cjs   # o que vai parar em cada célula
 ```
 
-O teste carrega o próprio `.gs`, com stubs mínimos do runtime do Apps Script.
-Se você mexer nas regras, rode isso antes de publicar.
+Os dois carregam o próprio `.gs`, com stubs mínimos do runtime do Apps Script.
+O de escrita roda a `atualizarMonitoramentoGPS()` de verdade contra uma
+planilha e um Eclipse simulados e confere célula por célula — é ele que pega
+bug de "detectou mas não gravou". Se você mexer nas regras, rode os dois antes
+de publicar.
 
 ## Colunas usadas na Programação
 
