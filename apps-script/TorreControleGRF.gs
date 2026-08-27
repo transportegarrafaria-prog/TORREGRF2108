@@ -628,7 +628,20 @@ function coletarProgramacao_(sheet, col, colTrava) {
       transportadora: col.transportadora ? String(txt[r][col.transportadora - 1] || "") : "",
       tipo: tipo,
       transbordoCfg: transbordoCfg,
-      horarioLimite: horarioLimiteTexto || getHorarioLimite_(destino),
+      // A TABELA HORARIO_LIMITE manda, sempre.
+      //
+      // Antes era "horarioLimiteTexto || getHorarioLimite_(destino)": o
+      // valor da célula vencia e a tabela era só reserva. Como o script
+      // reescreve a célula com o que leu, virava um laço que se
+      // auto-alimenta — o que caísse ali uma vez ficava para sempre, e
+      // mudar a tabela no script não surtia efeito em nenhuma linha que
+      // já tivesse valor. Era por isso que ANGRA seguia 04:00 e CAMPOS
+      // 03:00 mesmo com a tabela dizendo 01:00 e 00:00, e por isso a
+      // correção precisava ser refeita à mão todo dia.
+      //
+      // Agora a célula é saída, não entrada: a cada rodada ela é
+      // corrigida para o que a tabela diz. Mudou a tabela, mudou tudo.
+      horarioLimite: getHorarioLimite_(destino),
       horarioLimitePlanilha: horarioLimiteTexto,
       travaManual: colTrava ? ehSim_(txt[r][colTrava - 1]) : false,
       // linha mexida à mão nesta rodada: vale o que a pessoa escreveu
@@ -1774,6 +1787,60 @@ function diagnosticarDeteccaoDoDia() {
     Logger.log("ATENÇÃO: " + resumo.travadaSemRegistro + " linha(s) estão travadas sem nenhum registro."
       + " Elas nunca vão detectar saída. Rode liberarTravas() para soltar todas.");
   }
+}
+
+/**
+ * Mostra o horário-limite que a tabela dá para cada destino da
+ * Programação de hoje, e avisa quais caíram no padrão.
+ *
+ * Cair no padrão quase sempre quer dizer que o destino não está na
+ * tabela — grafia diferente, cidade nova, rota nova. Sem esse aviso o
+ * veículo recebe HORARIO_LIMITE_PADRAO em silêncio e ninguém percebe.
+ */
+function verHorariosLimite() {
+  var ss = getPlanilha_();
+  var sheet = getProgramacaoSheet_(ss);
+  var col = mapearColunasProgramacao_(sheet);
+  var prog = coletarProgramacao_(sheet, col, garantirColunaTrava_(sheet));
+  if (!prog.itens.length) { Logger.log("Nenhum veículo na Programação."); return; }
+
+  var porDestino = {};
+  prog.itens.forEach(function(item) {
+    var d = item.destino || "(sem destino)";
+    if (!porDestino[d]) porDestino[d] = { destino: d, limite: getHorarioLimite_(d), veiculos: [] };
+    porDestino[d].veiculos.push(item.placa);
+  });
+
+  var nomes = Object.keys(porDestino).sort();
+  var noPadrao = [];
+  Logger.log("Horário-limite por destino (" + prog.dataAlvo + "):");
+  nomes.forEach(function(d) {
+    var e = porDestino[d];
+    var padrao = e.limite === HORARIO_LIMITE_PADRAO && !destinoNaTabela_(d);
+    if (padrao) noPadrao.push(d);
+    Logger.log("  " + e.limite + "   " + d + "   (" + e.veiculos.length + " veíc.)"
+      + (padrao ? "   <-- CAIU NO PADRÃO: destino fora da tabela" : ""));
+  });
+
+  if (noPadrao.length) {
+    Logger.log("");
+    Logger.log("ATENÇÃO: " + noPadrao.length + " destino(s) não estão em HORARIO_LIMITE e receberam "
+      + HORARIO_LIMITE_PADRAO + " por padrão:");
+    noPadrao.forEach(function(d) { Logger.log("   - " + d); });
+    Logger.log("Para corrigir, acrescente o termo na tabela HORARIO_LIMITE, no topo do script.");
+  }
+}
+
+// O destino casa com algum termo da tabela? (separa "achou o padrão"
+// de "caiu no padrão por falta de regra")
+function destinoNaTabela_(destino) {
+  var alvo = semAcento_(destino);
+  for (var i = 0; i < HORARIO_LIMITE.length; i++) {
+    for (var j = 0; j < HORARIO_LIMITE[i].match.length; j++) {
+      if (alvo.indexOf(semAcento_(HORARIO_LIMITE[i].match[j])) !== -1) return true;
+    }
+  }
+  return false;
 }
 
 function verCabecalhosProgramacao() {

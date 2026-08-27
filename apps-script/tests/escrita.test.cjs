@@ -274,5 +274,45 @@ console.log("\n6) A API entrega o mesmo que está na planilha");
   ok("estado do que ficou é Na base", op[1].estado === "Na base", op[1].estado);
 }
 
+console.log("\n7) Horário-limite errado na planilha é corrigido pela tabela do script");
+{
+  // Caso real: a célula tinha 04:00 para ANGRA e 03:00 para CAMPOS, enquanto a
+  // tabela do script diz 01:00 e 00:00. Como o script reescrevia o que lia, o
+  // valor errado se perpetuava e precisava ser corrigido à mão todo dia.
+  const comLimiteErrado = (placa, destino, limiteErrado) => {
+    const l = linhaVazia(placa, destino);
+    l[C["Horário-Limite"]] = limiteErrado;
+    return l;
+  };
+  montarPlanilha([
+    comLimiteErrado("KAA1A11", "ANGRA", "04:00"),
+    comLimiteErrado("KBB2B22", "CAMPOS", "03:00"),
+  ]);
+
+  ok("a tabela do script diz 01:00 para ANGRA", getHorarioLimite_("ANGRA") === "01:00");
+  ok("a tabela do script diz 00:00 para CAMPOS", getHorarioLimite_("CAMPOS") === "00:00");
+
+  atualizarMonitoramentoGPS();
+  ok("célula de ANGRA corrigida para 01:00", cel(2, "Horário-Limite") === "01:00", cel(2, "Horário-Limite"));
+  ok("célula de CAMPOS corrigida para 00:00", cel(3, "Horário-Limite") === "00:00", cel(3, "Horário-Limite"));
+
+  const col = mapearColunasProgramacao_(progSheet);
+  const prog = coletarProgramacao_(progSheet, col, garantirColunaTrava_(progSheet));
+  const op = montarOperacaoDaProgramacao_(prog, lerMonitoramento_());
+  ok("o painel recebe 01:00 para ANGRA", op[0].horarioLimite === "01:00", op[0].horarioLimite);
+  ok("o painel recebe 00:00 para CAMPOS", op[1].horarioLimite === "00:00", op[1].horarioLimite);
+
+  // e continua corrigido na rodada seguinte, sem oscilar
+  atualizarMonitoramentoGPS();
+  ok("não volta ao valor errado", cel(2, "Horário-Limite") === "01:00", cel(2, "Horário-Limite"));
+
+  // mudar a tabela passa a valer imediatamente, que é o pedido central
+  const original = HORARIO_LIMITE.find((h) => h.match.includes("angra")).limite;
+  HORARIO_LIMITE.find((h) => h.match.includes("angra")).limite = "02:30";
+  atualizarMonitoramentoGPS();
+  ok("mudou a tabela -> a planilha acompanha", cel(2, "Horário-Limite") === "02:30", cel(2, "Horário-Limite"));
+  HORARIO_LIMITE.find((h) => h.match.includes("angra")).limite = original;
+}
+
 console.log(falhas ? `\n${falhas} FALHA(S)\n` : "\nTodos os testes de escrita passaram\n");
 process.exit(falhas ? 1 : 0);

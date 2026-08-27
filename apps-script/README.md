@@ -64,6 +64,40 @@ Transbordo que chegou no PA sai de "parado"/"em atenção" — ele terminou a
 viagem, não está com problema. As réguas ficam em `GPS_STOP_CRIT_MIN` (45) e
 `GPS_ATENCAO_MIN` (60) e vão no payload para o painel usar as mesmas.
 
+## Horário-limite: a tabela manda
+
+`HORARIO_LIMITE`, no topo do script, é a **única** fonte do horário-limite.
+A coluna Horário-Limite da Programação é **saída**, não entrada: a cada
+rodada ela é corrigida para o que a tabela diz.
+
+Mudou a tabela, mudou em todo lugar — planilha, painel e cálculo de atraso —
+na rodada seguinte. Não existe mais ajustar célula a célula.
+
+> Antes era o contrário: a célula vencia e a tabela era só reserva. Como o
+> script reescreve a célula com o que leu, virava um laço que se
+> auto-alimenta: o que caísse ali uma vez ficava para sempre, e corrigir a
+> tabela não surtia efeito em nenhuma linha que já tivesse valor.
+
+### Destino fora da tabela
+
+Destino que não casa com nenhum termo recebe `HORARIO_LIMITE_PADRAO`
+(05:00) **em silêncio**. Rode `verHorariosLimite()` para ver o limite de
+cada destino do dia e quais caíram no padrão:
+
+```
+Horário-limite por destino (2026-08-26):
+  01:00   ANGRA   (1 veíc.)
+  00:00   CAMPOS   (2 veíc.)
+  05:00   TERESOPOLIS   (3 veíc.)   <-- CAIU NO PADRÃO: destino fora da tabela
+
+ATENÇÃO: 1 destino(s) não estão em HORARIO_LIMITE e receberam 05:00 por padrão
+```
+
+Para corrigir, acrescente o termo na tabela. O casamento é por trecho do
+texto, sem acento e sem caixa, então `"teresopolis"` pega
+`TERESÓPOLIS` e `TERESOPOLIS - CENTRO`. A ordem importa: vale o primeiro
+item da tabela que casar.
+
 ## O que conta como saída
 
 Saída é a **transição de dentro para fora da cerca da base** dentro da janela
@@ -127,6 +161,7 @@ nova versão" para a URL não mudar.
 | `testarHistorico()` | o ranking de atraso, do pior para o melhor |
 | `diagnosticarPlaca()` | passo a passo de uma placa (edite a constante `PLACA`) |
 | `diagnosticarDeteccaoDoDia()` | **por que cada veículo foi ou não detectado** — rode quando o painel mostrar menos saídas do que a operação viu |
+| `verHorariosLimite()` | horário-limite de cada destino do dia, marcando os que caíram no padrão |
 
 ## Testes
 
