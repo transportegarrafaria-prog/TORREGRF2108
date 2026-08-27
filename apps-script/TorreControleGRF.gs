@@ -1199,24 +1199,32 @@ function chaveHistorico_(dataOperacional, placa) {
 function sincronizarHistorico_(ss, registros) {
   var hist = garantirAbaHistorico_(ss);
   var lastRow = hist.getLastRow();
-  var existentes = lastRow > 1 ? hist.getRange(2, 1, lastRow - 1, CAB_HISTORICO.length).getValues() : [];
+  var nCols = CAB_HISTORICO.length;
+  var agora = new Date();
+
+  // 1) Índice por chave lendo SÓ data e placa (2 colunas em vez de 14).
+  //    A aba cresce ~34 linhas por dia e nunca é podada; varrer as 14
+  //    colunas inteiras a cada 10 minutos ficava caro sem necessidade.
+  var chaves = lastRow > 1 ? hist.getRange(2, 1, lastRow - 1, 2).getValues() : [];
   var mapa = {};
-  for (var i = 0; i < existentes.length; i++) {
-    var k = chaveHistorico_(dataValida_(existentes[i][0]) ? existentes[i][0] : dataOperacionalDeTexto_(existentes[i][0]), existentes[i][1]);
+  for (var i = 0; i < chaves.length; i++) {
+    var k = chaveHistorico_(dataValida_(chaves[i][0]) ? chaves[i][0] : dataOperacionalDeTexto_(chaves[i][0]), chaves[i][1]);
     if (k) mapa[k] = i;
   }
 
-  var novas = [];
-  var agora = new Date();
+  // 2) Separa o que atualiza do que entra novo.
+  var atualizar = [];   // { idx, registro }
+  var novos = [];
   registros.forEach(function(l) {
     if (!l.dataOperacional) return;
-    var k = chaveHistorico_(l.dataOperacional, l.placa);
-    var idx = mapa[k];
+    var idx = mapa[chaveHistorico_(l.dataOperacional, l.placa)];
+    if (idx === undefined) novos.push(l); else atualizar.push({ idx: idx, registro: l });
+  });
+
+  function montarLinha(l, antiga) {
     var saiu = l.saiu, horaSaida = l.horaSaida, atrasoMin = l.atrasoMin;
     var chegou = l.chegou, horaChegada = l.horaChegada;
-
-    if (idx !== undefined) {
-      var antiga = existentes[idx];
+    if (antiga) {
       // nunca apaga um registro de saída/chegada que já existia
       if (semAcento_(antiga[6]) === "sim" && String(antiga[7] || "") && saiu !== "Sim") {
         saiu = "Sim";
@@ -1228,21 +1236,37 @@ function sincronizarHistorico_(ss, registros) {
         horaChegada = antiga[12];
       }
     }
-
-    var vals = [
+    return [
       l.dataOperacional, l.placa, l.transportadora, l.destino, l.tipo, l.horarioLimite,
       saiu, horaSaida, atrasoMin === null || atrasoMin === undefined ? "" : atrasoMin,
       formatarAtraso_(atrasoMin), l.status, chegou, horaChegada, agora
     ];
-    if (idx !== undefined) existentes[idx] = vals; else novas.push(vals);
-  });
+  }
 
-  if (existentes.length) hist.getRange(2, 1, existentes.length, CAB_HISTORICO.length).setValues(existentes);
-  if (novas.length) hist.getRange(existentes.length + 2, 1, novas.length, CAB_HISTORICO.length).setValues(novas);
+  // 3) Reescreve apenas o trecho que contém as linhas do dia. Como elas são
+  //    gravadas juntas, na prática é um bloco só no fim da aba — as linhas
+  //    antigas não são tocadas.
+  if (atualizar.length) {
+    var min = atualizar[0].idx, max = atualizar[0].idx;
+    atualizar.forEach(function(a) { if (a.idx < min) min = a.idx; if (a.idx > max) max = a.idx; });
+    var altura = max - min + 1;
+    var bloco = hist.getRange(2 + min, 1, altura, nCols).getValues();
+    atualizar.forEach(function(a) {
+      bloco[a.idx - min] = montarLinha(a.registro, bloco[a.idx - min]);
+    });
+    hist.getRange(2 + min, 1, altura, nCols).setValues(bloco);
+    hist.getRange(2 + min, 1, altura, 1).setNumberFormat("dd/MM/yyyy");
+    hist.getRange(2 + min, 14, altura, 1).setNumberFormat("dd/MM/yyyy HH:mm");
+  }
 
-  var n = Math.max(hist.getLastRow() - 1, 1);
-  hist.getRange(2, 1, n, 1).setNumberFormat("dd/MM/yyyy");
-  hist.getRange(2, 14, n, 1).setNumberFormat("dd/MM/yyyy HH:mm");
+  // 4) Acrescenta as linhas novas no fim, num bloco só.
+  if (novos.length) {
+    var primeira = lastRow + 1;
+    var linhasNovas = novos.map(function(l) { return montarLinha(l, null); });
+    hist.getRange(primeira, 1, linhasNovas.length, nCols).setValues(linhasNovas);
+    hist.getRange(primeira, 1, linhasNovas.length, 1).setNumberFormat("dd/MM/yyyy");
+    hist.getRange(primeira, 14, linhasNovas.length, 1).setNumberFormat("dd/MM/yyyy HH:mm");
+  }
 }
 
 /**
@@ -1521,11 +1545,27 @@ function montarHistoricoIndicador_(dias) {
   if (!hist || hist.getLastRow() < 2) return vazio;
 
   var lastRow = hist.getLastRow();
-  var raw = hist.getRange(2, 1, lastRow - 1, CAB_HISTORICO.length).getValues();
-  var txt = hist.getRange(2, 1, lastRow - 1, CAB_HISTORICO.length).getDisplayValues();
-
   var hoje = new Date();
   var corte = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - janelaDias, 0, 0, 0).getTime();
+
+  // A aba guarda tudo para sempre, mas o ranking só olha a janela. Localiza
+  // primeiro QUAIS linhas entram, lendo só a coluna da data, e depois carrega
+  // as 14 colunas apenas desse trecho. Sem isso o doGet lia a aba inteira
+  // duas vezes a cada atualização do painel — e ela cresce ~34 linhas por dia.
+  var datasRaw = hist.getRange(2, 1, lastRow - 1, 1).getValues();
+  var datasTxt = hist.getRange(2, 1, lastRow - 1, 1).getDisplayValues();
+  var min = -1, max = -1;
+  for (var d = 0; d < datasRaw.length; d++) {
+    var dt = dataValida_(datasRaw[d][0]) ? datasRaw[d][0] : dataOperacionalDeTexto_(datasTxt[d][0]);
+    if (!dt || dt.getTime() < corte) continue;
+    if (min === -1) min = d;
+    max = d;
+  }
+  if (min === -1) return vazio;
+
+  var altura = max - min + 1;
+  var raw = hist.getRange(2 + min, 1, altura, CAB_HISTORICO.length).getValues();
+  var txt = hist.getRange(2 + min, 1, altura, CAB_HISTORICO.length).getDisplayValues();
 
   var porTransp = {}, porVeiculo = {};
   var de = null, ate = null, totalProgramados = 0, totalSaidas = 0;

@@ -15,12 +15,16 @@ const vm = require("node:vm");
 
 /* ---------- planilha falsa ---------- */
 
+const custo = { lidas: 0, escritas: 0 };
+function zerarCusto() { custo.lidas = 0; custo.escritas = 0; }
+
 function criarSheet(nome, matriz) {
   const m = matriz;
   const alvo = (r, c, nr, nc) => ({
-    getValues: () => m.slice(r - 1, r - 1 + nr).map((row) => row.slice(c - 1, c - 1 + nc)),
+    getValues: () => (custo.lidas += nr * nc, m.slice(r - 1, r - 1 + nr).map((row) => row.slice(c - 1, c - 1 + nc))),
     getDisplayValues: () =>
-      m.slice(r - 1, r - 1 + nr).map((row) =>
+      (custo.lidas += nr * nc,
+      m.slice(r - 1, r - 1 + nr)).map((row) =>
         row.slice(c - 1, c - 1 + nc).map((v) => {
           if (v instanceof Date) {
             const p = (n) => String(n).padStart(2, "0");
@@ -30,6 +34,7 @@ function criarSheet(nome, matriz) {
         }),
       ),
     setValues: (vals) => {
+      custo.escritas += nr * nc;
       vals.forEach((row, i) =>
         row.forEach((v, j) => {
           while (m.length <= r - 1 + i) m.push(new Array(m[0].length).fill(""));
@@ -39,6 +44,7 @@ function criarSheet(nome, matriz) {
       return alvo(r, c, nr, nc);
     },
     setValue: (v) => {
+      custo.escritas += 1;
       while (m.length <= r - 1) m.push(new Array(m[0].length).fill(""));
       m[r - 1][c - 1] = v;
       return alvo(r, c, nr, nc);
@@ -312,6 +318,110 @@ console.log("\n7) Horário-limite errado na planilha é corrigido pela tabela do
   atualizarMonitoramentoGPS();
   ok("mudou a tabela -> a planilha acompanha", cel(2, "Horário-Limite") === "02:30", cel(2, "Horário-Limite"));
   HORARIO_LIMITE.find((h) => h.match.includes("angra")).limite = original;
+}
+
+console.log("\n8) Histórico grande: linhas antigas intocadas e custo limitado à janela");
+{
+  // 90 dias de histórico, 6 veículos por dia = 540 linhas.
+  const DIAS = 90, PLACAS = ["KAA1A11", "KBB2B22", "KCC3C33", "KDD4D44", "KEE5E55", "KFF6F66"];
+  const antigas = [];
+  const hoje = new Date(2026, 7, 26);
+  for (let d = DIAS; d >= 1; d--) {
+    const dia = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - d);
+    for (const placa of PLACAS) {
+      antigas.push([dia, placa, "TRANS SUL", "PETROPOLIS", "Entrega", "06:00",
+        "Sim", "05:30", -30, "No prazo", "No prazo", "", "", dia]);
+    }
+  }
+  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS"), linhaVazia("KBB2B22", "PETROPOLIS")]);
+  histSheet.matriz.push(...antigas.map((r) => r.slice()));
+  const totalAntes = histSheet.matriz.length - 1;
+  const copia = JSON.stringify(histSheet.matriz.slice(1));
+  ok(`histórico com ${totalAntes} linhas antigas`, totalAntes === DIAS * PLACAS.length, totalAntes);
+
+  zerarCusto();
+  atualizarMonitoramentoGPS();
+  const escritasHist = custo.escritas;
+
+  // as linhas antigas continuam exatamente como estavam
+  const depois = histSheet.matriz.slice(1, 1 + totalAntes);
+  ok("nenhuma linha antiga foi alterada", JSON.stringify(depois) === copia);
+  ok("as 2 linhas do dia foram acrescentadas",
+    histSheet.matriz.length - 1 === totalAntes + 2, histSheet.matriz.length - 1);
+
+  // o custo não pode escalar com o tamanho da aba
+  const teto = totalAntes * 14;
+  ok(`escreveu bem menos que a aba inteira (${escritasHist} << ${teto})`, escritasHist < teto / 5,
+    `${escritasHist} vs ${teto}`);
+
+  // segunda rodada: agora as linhas do dia JÁ existem e são atualizadas
+  zerarCusto();
+  atualizarMonitoramentoGPS();
+  ok("2ª rodada também não mexe nas antigas",
+    JSON.stringify(histSheet.matriz.slice(1, 1 + totalAntes)) === copia);
+  ok(`2ª rodada continua barata (${custo.escritas} células)`, custo.escritas < teto / 5, custo.escritas);
+}
+
+console.log("\n9) O ranking enxerga só a janela, e o resultado não mudou");
+{
+  const h = montarHistoricoIndicador_(30);
+  ok("período começa dentro da janela de 30 dias", h.de >= "2026-07-27", h.de);
+  ok("período termina hoje", h.ate === "2026-08-26", h.ate);
+
+  // 90 dias na aba, mas só 30 podem entrar
+  const maxLinhas = 30 * 6 + 2;
+  ok(`conta no máximo a janela (${h.totalProgramados} <= ${maxLinhas})`,
+    h.totalProgramados <= maxLinhas, h.totalProgramados);
+
+  // as linhas antigas tinham atraso -30 (no prazo): se vazassem, a média cairia
+  const sul = h.transportadoras.find((t) => t.nome === "TRANS SUL");
+  ok("transportadora das linhas antigas aparece", !!sul, JSON.stringify(h.transportadoras.map((t) => t.nome)));
+  ok("todas as saídas contadas são da janela", sul.saidas <= 30 * 6, sul.saidas);
+
+  // janela menor devolve menos, provando que o corte é por data e não por posição
+  const h7 = montarHistoricoIndicador_(7);
+  ok("janela de 7 dias devolve menos que a de 30",
+    h7.totalProgramados < h.totalProgramados, `${h7.totalProgramados} vs ${h.totalProgramados}`);
+}
+
+console.log("\n10) Valores fixos do ranking (trava contra mudança silenciosa)");
+{
+  // Dataset pequeno e conferível à mão: 2 transportadoras, 3 dias.
+  // Se alguma mudança futura mexer na conta, estes números quebram.
+  const hoje = new Date(2026, 7, 26);
+  const dia = (n) => new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - n);
+  const linha = (d, placa, transp, atraso) =>
+    [dia(d), placa, transp, "PETROPOLIS", "Entrega", "06:00", "Sim", "05:30",
+     atraso, "", atraso > 0 ? "Atrasado" : "No prazo", "", "", dia(d)];
+
+  montarPlanilha([linhaVazia("ZZZ9Z99", "PETROPOLIS")]);
+  histSheet.matriz.push(
+    linha(1, "AAA1A11", "ALFA",  60),    // ALFA:  60, 120, -40 -> soma 180, média 60
+    linha(2, "AAA1A11", "ALFA", 120),
+    linha(3, "BBB2B22", "ALFA", -40),    // adiantamento conta como zero
+    linha(1, "CCC3C33", "BETA",  30),    // BETA:  30, 0 -> média 15
+    linha(2, "CCC3C33", "BETA",   0),
+  );
+
+  const h = montarHistoricoIndicador_(30);
+  const alfa = h.transportadoras.find((t) => t.nome === "ALFA");
+  const beta = h.transportadoras.find((t) => t.nome === "BETA");
+
+  ok("ALFA: 3 saídas medidas", alfa.saidas === 3, alfa.saidas);
+  ok("ALFA: média 60 min (adiantamento vira zero)", alfa.atrasoMedioMin === 60, alfa.atrasoMedioMin);
+  ok("ALFA: pior 120 min", alfa.atrasoMaxMin === 120, alfa.atrasoMaxMin);
+  ok("ALFA: 2 atrasadas, 1 no prazo", alfa.atrasadas === 2 && alfa.noHorario === 1,
+    `${alfa.atrasadas}/${alfa.noHorario}`);
+  ok("ALFA: 33% no prazo", alfa.pctNoHorario === 33, alfa.pctNoHorario);
+
+  ok("BETA: média 15 min", beta.atrasoMedioMin === 15, beta.atrasoMedioMin);
+  ok("BETA: atraso zero conta como no prazo", beta.noHorario === 1 && beta.atrasadas === 1,
+    `${beta.noHorario}/${beta.atrasadas}`);
+  ok("ALFA na frente de BETA", h.transportadoras[0].nome === "ALFA", h.transportadoras[0].nome);
+
+  const aaa = h.veiculos.find((v) => v.placa === "AAA1A11");
+  ok("veículo AAA1A11: média 90 min", aaa.atrasoMedioMin === 90, aaa.atrasoMedioMin);
+  ok("veículo AAA1A11: n=2", aaa.saidas === 2, aaa.saidas);
 }
 
 console.log(falhas ? `\n${falhas} FALHA(S)\n` : "\nTodos os testes de escrita passaram\n");

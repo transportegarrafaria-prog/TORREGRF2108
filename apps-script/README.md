@@ -163,6 +163,24 @@ nova versão" para a URL não mudar.
 | `diagnosticarDeteccaoDoDia()` | **por que cada veículo foi ou não detectado** — rode quando o painel mostrar menos saídas do que a operação viu |
 | `verHorariosLimite()` | horário-limite de cada destino do dia, marcando os que caíram no padrão |
 
+## Custo na planilha
+
+A aba Histórico guarda tudo e nunca é podada — ~34 linhas por dia. As duas
+rotinas que a tocam só trabalham no trecho de que precisam:
+
+| Rotina | Quando roda | O que toca |
+|---|---|---|
+| `sincronizarHistorico_` | a cada 10 min | as linhas do dia; as antigas não são reescritas |
+| `montarHistoricoIndicador_` | a cada `doGet` (painel, 60 s) | só a janela de `HISTORICO_DIAS` |
+
+Medido no teste de escrita, com 540 linhas antigas na aba: a rodada escreve
+**112 células** em vez das 7.560 da aba inteira. O ranking devolve exatamente
+o mesmo resultado — isso está travado no teste 10, com valores fixos.
+
+Se um dia a aba ficar grande demais para o gosto de vocês, dá para arquivar
+os meses antigos numa outra aba sem quebrar nada: o ranking já ignora o que
+está fora da janela.
+
 ## Testes
 
 A lógica pura (detecção, travamento, atraso, estados) roda fora do Google:
