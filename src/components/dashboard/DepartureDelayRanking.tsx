@@ -47,6 +47,29 @@ function DicaAtraso({ active, payload }: { active?: boolean; payload?: { payload
   );
 }
 
+function RotuloBarra(props: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  index?: number;
+  dados?: Ponto[];
+}) {
+  const { x = 0, y = 0, width = 0, height = 0, index = 0, dados = [] } = props;
+  const d = dados[index];
+  if (!d) return null;
+  return (
+    <text x={x + width + 8} y={y + height / 2} dominantBaseline="middle" fontSize={12}>
+      <tspan fill="var(--foreground)" fontWeight={600}>
+        {fmtMin(d.atrasoMedioMin)}
+      </tspan>
+      <tspan fill="var(--subtle)" dx={6} fontWeight={400}>
+        n={d.saidas}
+      </tspan>
+    </text>
+  );
+}
+
 function Ranking({
   titulo,
   entidade,
@@ -102,12 +125,16 @@ function Ranking({
                   radius={[0, 4, 4, 0]}
                   isAnimationActive={false}
                 >
+                  {/*
+                    A média vem junto com o tamanho da amostra. Sem isso,
+                    "+108min" apoiado numa única saída parece tão firme
+                    quanto um apoiado em vinte.
+                  */}
                   <LabelList
                     dataKey="atrasoMedioMin"
                     position="right"
                     offset={8}
-                    formatter={(v: number) => fmtMin(v)}
-                    style={{ fill: "var(--foreground)", fontSize: 12, fontWeight: 600 }}
+                    content={<RotuloBarra dados={dados} />}
                   />
                 </Bar>
               </BarChart>
@@ -199,9 +226,10 @@ export function DepartureDelayRanking({
         />
       </div>
       <p className="text-xs text-subtle">
-        Atraso médio na saída · aba Histórico, últimos {historico.dias} dias
-        {periodo ? ` (${periodo})` : ""} · <span className="tabular">{historico.totalSaidas}</span>{" "}
-        saídas medidas · adiantamento conta como zero
+        Atraso médio na saída · aba Histórico
+        {periodo ? `, ${periodo}` : `, últimos ${historico.dias} dias`} ·{" "}
+        <span className="tabular">{historico.totalSaidas}</span> saídas medidas · adiantamento conta
+        como zero · <span className="tabular">n</span> = saídas que sustentam cada média
       </p>
     </div>
   );

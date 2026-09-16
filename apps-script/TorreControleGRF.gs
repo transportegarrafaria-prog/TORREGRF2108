@@ -111,10 +111,10 @@ var BASE_GRF = { lat: -22.08021, lon: -43.21244, raio: 300 };
 // Pontos de apoio / transbordo (chegada por coordenada).
 var TRANSBORDOS = [
   { nome: "Penha RJ",        destino: ["rio de janeiro", "penha"],       lat: -22.82105, lon: -43.27655, raio: 600 },
-  { nome: "Barra Mansa",     destino: ["barra mansa"],                   lat: -22.55510, lon: -44.13016, raio: 400 },
+  { nome: "Barra Mansa",     destino: ["barra mansa"],                   lat: -22.53284, lon: -44.19691, raio: 400 },
   { nome: "Lagos",           destino: ["lagos", "sao pedro", "cabo frio", "aldeia"], lat: -22.83871, lon: -42.14206, raio: 400 },
   { nome: "Campos",          destino: ["campos", "goytacaz"],            lat: -21.71256, lon: -41.30403, raio: 400 },
-  { nome: "Duque de Caxias", destino: ["duque de caxias", "caxias"],     lat: -22.68069, lon: -43.29568, raio: 400 },
+  { nome: "Duque de Caxias", destino: ["duque de caxias", "caxias"],     lat: -22.68071, lon: -43.29568, raio: 400 },
   { nome: "Angra",           destino: ["angra"],                         lat: -22.99707, lon: -44.23958, raio: 400 }
 ];
 
@@ -128,7 +128,7 @@ var HORARIO_LIMITE = [
   { match: ["tres rios", "paraiba do sul"],               limite: "07:00" },
   { match: ["rio de janeiro", "penha", "caxias", "duque de caxias"], limite: "03:00" }
 ];
-var HORARIO_LIMITE_PADRAO = "05:00";
+var HORARIO_LIMITE_PADRAO = "06:00";
 
 // Endpoints da interface Eclipse.
 var ECLIPSE_LOGIN_URL_DEFAULT = "http://www2.gpseclipse.com:8080/login.php";
@@ -628,7 +628,20 @@ function coletarProgramacao_(sheet, col, colTrava) {
       transportadora: col.transportadora ? String(txt[r][col.transportadora - 1] || "") : "",
       tipo: tipo,
       transbordoCfg: transbordoCfg,
-      horarioLimite: horarioLimiteTexto || getHorarioLimite_(destino),
+      // A TABELA HORARIO_LIMITE manda, sempre.
+      //
+      // Antes era "horarioLimiteTexto || getHorarioLimite_(destino)": o
+      // valor da célula vencia e a tabela era só reserva. Como o script
+      // reescreve a célula com o que leu, virava um laço que se
+      // auto-alimenta — o que caísse ali uma vez ficava para sempre, e
+      // mudar a tabela no script não surtia efeito em nenhuma linha que
+      // já tivesse valor. Era por isso que ANGRA seguia 04:00 e CAMPOS
+      // 03:00 mesmo com a tabela dizendo 01:00 e 00:00, e por isso a
+      // correção precisava ser refeita à mão todo dia.
+      //
+      // Agora a célula é saída, não entrada: a cada rodada ela é
+      // corrigida para o que a tabela diz. Mudou a tabela, mudou tudo.
+      horarioLimite: getHorarioLimite_(destino),
       horarioLimitePlanilha: horarioLimiteTexto,
       travaManual: colTrava ? ehSim_(txt[r][colTrava - 1]) : false,
       // linha mexida à mão nesta rodada: vale o que a pessoa escreveu
@@ -792,6 +805,37 @@ function estaNaBase_(ev) {
 }
 
 /**
+ * Prova de que a saída é real, e não jitter de GPS na borda da cerca.
+ *
+ * A partir da transição, procura o primeiro ponto que esteja ANDANDO
+ * (velocidade acima do limiar ou status "em movimento") E longe do
+ * último ponto ainda dentro da base. Um ponto solto que pulou para
+ * fora com o veículo desligado nunca passa por aqui.
+ *
+ * O horário carimbado continua sendo o da transição: a confirmação
+ * pode chegar no ciclo seguinte sem mudar a hora da saída. Na prática,
+ * ou o veículo saiu mesmo — e o próximo ponto já vem em movimento —,
+ * ou nunca saiu, e nada é carimbado.
+ */
+function afastouDaBase_(posicoes, i, manobraMs) {
+  var ref = posicoes[i - 1];            // último ponto ainda na base
+  var temRef = ref.lat !== null && ref.lon !== null;
+  var t = posicoes[i].dataHora.getTime();
+
+  for (var j = i; j < posicoes.length; j++) {
+    var p = posicoes[j];
+    if (p.dataHora.getTime() - t > manobraMs) break;
+    if (p.naBase) break;                // voltou: o laço de fora já trata
+    var andando = (p.velocidade !== null && p.velocidade > GPS_STOP_SPEED_KMH) || p.emMovimento;
+    if (!andando) continue;
+    if (temRef && p.lat !== null && p.lon !== null &&
+        distanciaMetros_(p.lat, p.lon, ref.lat, ref.lon) <= GPS_STOP_RADIUS_M) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
  * Saída = transição "estava na base -> saiu da base" que NÃO
  * volta dentro da janela de manobra/balança, procurada apenas
  * DENTRO da janela do dia operacional (véspera 21h -> fim do dia).
@@ -830,6 +874,14 @@ function detectarSaidaBase_(eventos, dataOperacional) {
       if (posicoes[j].naBase) { voltou = true; break; }
     }
     if (voltou) continue; // manobra / balança, não é saída de verdade
+
+    // Sair da cerca, sozinho, NÃO é sair da base. A cerca do Eclipse
+    // pisca: com o caminhão parado e desligado no pátio o relatório
+    // emite "Partida"/"Chegou" de novo e de novo, e o MESMO ponto ora
+    // resolve "GRF Distribuicao", ora "Tres Rios" — foi o que gerou as
+    // várias saídas falsas de veículos que nunca saíram.
+    // Agora a transição só vale com prova de movimento.
+    if (!afastouDaBase_(posicoes, i, manobraMs)) continue;
 
     return posicoes[i].dataHora;
   }
@@ -1186,24 +1238,32 @@ function chaveHistorico_(dataOperacional, placa) {
 function sincronizarHistorico_(ss, registros) {
   var hist = garantirAbaHistorico_(ss);
   var lastRow = hist.getLastRow();
-  var existentes = lastRow > 1 ? hist.getRange(2, 1, lastRow - 1, CAB_HISTORICO.length).getValues() : [];
+  var nCols = CAB_HISTORICO.length;
+  var agora = new Date();
+
+  // 1) Índice por chave lendo SÓ data e placa (2 colunas em vez de 14).
+  //    A aba cresce ~34 linhas por dia e nunca é podada; varrer as 14
+  //    colunas inteiras a cada 10 minutos ficava caro sem necessidade.
+  var chaves = lastRow > 1 ? hist.getRange(2, 1, lastRow - 1, 2).getValues() : [];
   var mapa = {};
-  for (var i = 0; i < existentes.length; i++) {
-    var k = chaveHistorico_(dataValida_(existentes[i][0]) ? existentes[i][0] : dataOperacionalDeTexto_(existentes[i][0]), existentes[i][1]);
+  for (var i = 0; i < chaves.length; i++) {
+    var k = chaveHistorico_(dataValida_(chaves[i][0]) ? chaves[i][0] : dataOperacionalDeTexto_(chaves[i][0]), chaves[i][1]);
     if (k) mapa[k] = i;
   }
 
-  var novas = [];
-  var agora = new Date();
+  // 2) Separa o que atualiza do que entra novo.
+  var atualizar = [];   // { idx, registro }
+  var novos = [];
   registros.forEach(function(l) {
     if (!l.dataOperacional) return;
-    var k = chaveHistorico_(l.dataOperacional, l.placa);
-    var idx = mapa[k];
+    var idx = mapa[chaveHistorico_(l.dataOperacional, l.placa)];
+    if (idx === undefined) novos.push(l); else atualizar.push({ idx: idx, registro: l });
+  });
+
+  function montarLinha(l, antiga) {
     var saiu = l.saiu, horaSaida = l.horaSaida, atrasoMin = l.atrasoMin;
     var chegou = l.chegou, horaChegada = l.horaChegada;
-
-    if (idx !== undefined) {
-      var antiga = existentes[idx];
+    if (antiga) {
       // nunca apaga um registro de saída/chegada que já existia
       if (semAcento_(antiga[6]) === "sim" && String(antiga[7] || "") && saiu !== "Sim") {
         saiu = "Sim";
@@ -1215,21 +1275,37 @@ function sincronizarHistorico_(ss, registros) {
         horaChegada = antiga[12];
       }
     }
-
-    var vals = [
+    return [
       l.dataOperacional, l.placa, l.transportadora, l.destino, l.tipo, l.horarioLimite,
       saiu, horaSaida, atrasoMin === null || atrasoMin === undefined ? "" : atrasoMin,
       formatarAtraso_(atrasoMin), l.status, chegou, horaChegada, agora
     ];
-    if (idx !== undefined) existentes[idx] = vals; else novas.push(vals);
-  });
+  }
 
-  if (existentes.length) hist.getRange(2, 1, existentes.length, CAB_HISTORICO.length).setValues(existentes);
-  if (novas.length) hist.getRange(existentes.length + 2, 1, novas.length, CAB_HISTORICO.length).setValues(novas);
+  // 3) Reescreve apenas o trecho que contém as linhas do dia. Como elas são
+  //    gravadas juntas, na prática é um bloco só no fim da aba — as linhas
+  //    antigas não são tocadas.
+  if (atualizar.length) {
+    var min = atualizar[0].idx, max = atualizar[0].idx;
+    atualizar.forEach(function(a) { if (a.idx < min) min = a.idx; if (a.idx > max) max = a.idx; });
+    var altura = max - min + 1;
+    var bloco = hist.getRange(2 + min, 1, altura, nCols).getValues();
+    atualizar.forEach(function(a) {
+      bloco[a.idx - min] = montarLinha(a.registro, bloco[a.idx - min]);
+    });
+    hist.getRange(2 + min, 1, altura, nCols).setValues(bloco);
+    hist.getRange(2 + min, 1, altura, 1).setNumberFormat("dd/MM/yyyy");
+    hist.getRange(2 + min, 14, altura, 1).setNumberFormat("dd/MM/yyyy HH:mm");
+  }
 
-  var n = Math.max(hist.getLastRow() - 1, 1);
-  hist.getRange(2, 1, n, 1).setNumberFormat("dd/MM/yyyy");
-  hist.getRange(2, 14, n, 1).setNumberFormat("dd/MM/yyyy HH:mm");
+  // 4) Acrescenta as linhas novas no fim, num bloco só.
+  if (novos.length) {
+    var primeira = lastRow + 1;
+    var linhasNovas = novos.map(function(l) { return montarLinha(l, null); });
+    hist.getRange(primeira, 1, linhasNovas.length, nCols).setValues(linhasNovas);
+    hist.getRange(primeira, 1, linhasNovas.length, 1).setNumberFormat("dd/MM/yyyy");
+    hist.getRange(primeira, 14, linhasNovas.length, 1).setNumberFormat("dd/MM/yyyy HH:mm");
+  }
 }
 
 /**
@@ -1508,11 +1584,27 @@ function montarHistoricoIndicador_(dias) {
   if (!hist || hist.getLastRow() < 2) return vazio;
 
   var lastRow = hist.getLastRow();
-  var raw = hist.getRange(2, 1, lastRow - 1, CAB_HISTORICO.length).getValues();
-  var txt = hist.getRange(2, 1, lastRow - 1, CAB_HISTORICO.length).getDisplayValues();
-
   var hoje = new Date();
   var corte = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - janelaDias, 0, 0, 0).getTime();
+
+  // A aba guarda tudo para sempre, mas o ranking só olha a janela. Localiza
+  // primeiro QUAIS linhas entram, lendo só a coluna da data, e depois carrega
+  // as 14 colunas apenas desse trecho. Sem isso o doGet lia a aba inteira
+  // duas vezes a cada atualização do painel — e ela cresce ~34 linhas por dia.
+  var datasRaw = hist.getRange(2, 1, lastRow - 1, 1).getValues();
+  var datasTxt = hist.getRange(2, 1, lastRow - 1, 1).getDisplayValues();
+  var min = -1, max = -1;
+  for (var d = 0; d < datasRaw.length; d++) {
+    var dt = dataValida_(datasRaw[d][0]) ? datasRaw[d][0] : dataOperacionalDeTexto_(datasTxt[d][0]);
+    if (!dt || dt.getTime() < corte) continue;
+    if (min === -1) min = d;
+    max = d;
+  }
+  if (min === -1) return vazio;
+
+  var altura = max - min + 1;
+  var raw = hist.getRange(2 + min, 1, altura, CAB_HISTORICO.length).getValues();
+  var txt = hist.getRange(2 + min, 1, altura, CAB_HISTORICO.length).getDisplayValues();
 
   var porTransp = {}, porVeiculo = {};
   var de = null, ate = null, totalProgramados = 0, totalSaidas = 0;
@@ -1774,6 +1866,60 @@ function diagnosticarDeteccaoDoDia() {
     Logger.log("ATENÇÃO: " + resumo.travadaSemRegistro + " linha(s) estão travadas sem nenhum registro."
       + " Elas nunca vão detectar saída. Rode liberarTravas() para soltar todas.");
   }
+}
+
+/**
+ * Mostra o horário-limite que a tabela dá para cada destino da
+ * Programação de hoje, e avisa quais caíram no padrão.
+ *
+ * Cair no padrão quase sempre quer dizer que o destino não está na
+ * tabela — grafia diferente, cidade nova, rota nova. Sem esse aviso o
+ * veículo recebe HORARIO_LIMITE_PADRAO em silêncio e ninguém percebe.
+ */
+function verHorariosLimite() {
+  var ss = getPlanilha_();
+  var sheet = getProgramacaoSheet_(ss);
+  var col = mapearColunasProgramacao_(sheet);
+  var prog = coletarProgramacao_(sheet, col, garantirColunaTrava_(sheet));
+  if (!prog.itens.length) { Logger.log("Nenhum veículo na Programação."); return; }
+
+  var porDestino = {};
+  prog.itens.forEach(function(item) {
+    var d = item.destino || "(sem destino)";
+    if (!porDestino[d]) porDestino[d] = { destino: d, limite: getHorarioLimite_(d), veiculos: [] };
+    porDestino[d].veiculos.push(item.placa);
+  });
+
+  var nomes = Object.keys(porDestino).sort();
+  var noPadrao = [];
+  Logger.log("Horário-limite por destino (" + prog.dataAlvo + "):");
+  nomes.forEach(function(d) {
+    var e = porDestino[d];
+    var padrao = e.limite === HORARIO_LIMITE_PADRAO && !destinoNaTabela_(d);
+    if (padrao) noPadrao.push(d);
+    Logger.log("  " + e.limite + "   " + d + "   (" + e.veiculos.length + " veíc.)"
+      + (padrao ? "   <-- CAIU NO PADRÃO: destino fora da tabela" : ""));
+  });
+
+  if (noPadrao.length) {
+    Logger.log("");
+    Logger.log("ATENÇÃO: " + noPadrao.length + " destino(s) não estão em HORARIO_LIMITE e receberam "
+      + HORARIO_LIMITE_PADRAO + " por padrão:");
+    noPadrao.forEach(function(d) { Logger.log("   - " + d); });
+    Logger.log("Para corrigir, acrescente o termo na tabela HORARIO_LIMITE, no topo do script.");
+  }
+}
+
+// O destino casa com algum termo da tabela? (separa "achou o padrão"
+// de "caiu no padrão por falta de regra")
+function destinoNaTabela_(destino) {
+  var alvo = semAcento_(destino);
+  for (var i = 0; i < HORARIO_LIMITE.length; i++) {
+    for (var j = 0; j < HORARIO_LIMITE[i].match.length; j++) {
+      if (alvo.indexOf(semAcento_(HORARIO_LIMITE[i].match[j])) !== -1) return true;
+    }
+  }
+  return false;
 }
 
 function verCabecalhosProgramacao() {
