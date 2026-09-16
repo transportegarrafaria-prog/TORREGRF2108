@@ -433,7 +433,7 @@ console.log("\n8) Horário-limite por rota");
   ok("RIO DE JANEIRO (RUA DO ARROZ) -> 03:00", getHorarioLimite_("RIO DE JANEIRO (RUA DO ARROZ)") === "03:00");
   ok("CAXIAS -> 03:00", getHorarioLimite_("RIO DE JANEIRO (RUA DO ALHO/CAXIAS)") === "03:00");
   ok("BARRA MANSA -> 04:00", getHorarioLimite_("BARRA MANSA") === "04:00");
-  ok("VASSOURAS -> padrão 05:00", getHorarioLimite_("VASSOURAS") === "05:00");
+  ok("VASSOURAS -> padrão 06:00", getHorarioLimite_("VASSOURAS") === "06:00");
   ok("PETROPOLIS -> 06:00", getHorarioLimite_("PETROPOLIS") === "06:00");
   ok("PARAIBA DO SUL -> 07:00", getHorarioLimite_("PARAIBA DO SUL") === "07:00");
 }

@@ -111,10 +111,10 @@ var BASE_GRF = { lat: -22.08021, lon: -43.21244, raio: 300 };
 // Pontos de apoio / transbordo (chegada por coordenada).
 var TRANSBORDOS = [
   { nome: "Penha RJ",        destino: ["rio de janeiro", "penha"],       lat: -22.82105, lon: -43.27655, raio: 600 },
-  { nome: "Barra Mansa",     destino: ["barra mansa"],                   lat: -22.55510, lon: -44.13016, raio: 400 },
+  { nome: "Barra Mansa",     destino: ["barra mansa"],                   lat: -22.53284, lon: -44.19691, raio: 400 },
   { nome: "Lagos",           destino: ["lagos", "sao pedro", "cabo frio", "aldeia"], lat: -22.83871, lon: -42.14206, raio: 400 },
   { nome: "Campos",          destino: ["campos", "goytacaz"],            lat: -21.71256, lon: -41.30403, raio: 400 },
-  { nome: "Duque de Caxias", destino: ["duque de caxias", "caxias"],     lat: -22.68069, lon: -43.29568, raio: 400 },
+  { nome: "Duque de Caxias", destino: ["duque de caxias", "caxias"],     lat: -22.68071, lon: -43.29568, raio: 400 },
   { nome: "Angra",           destino: ["angra"],                         lat: -22.99707, lon: -44.23958, raio: 400 }
 ];
 
@@ -128,7 +128,7 @@ var HORARIO_LIMITE = [
   { match: ["tres rios", "paraiba do sul"],               limite: "07:00" },
   { match: ["rio de janeiro", "penha", "caxias", "duque de caxias"], limite: "03:00" }
 ];
-var HORARIO_LIMITE_PADRAO = "05:00";
+var HORARIO_LIMITE_PADRAO = "06:00";
 
 // Endpoints da interface Eclipse.
 var ECLIPSE_LOGIN_URL_DEFAULT = "http://www2.gpseclipse.com:8080/login.php";
