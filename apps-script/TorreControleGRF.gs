@@ -805,6 +805,37 @@ function estaNaBase_(ev) {
 }
 
 /**
+ * Prova de que a saída é real, e não jitter de GPS na borda da cerca.
+ *
+ * A partir da transição, procura o primeiro ponto que esteja ANDANDO
+ * (velocidade acima do limiar ou status "em movimento") E longe do
+ * último ponto ainda dentro da base. Um ponto solto que pulou para
+ * fora com o veículo desligado nunca passa por aqui.
+ *
+ * O horário carimbado continua sendo o da transição: a confirmação
+ * pode chegar no ciclo seguinte sem mudar a hora da saída. Na prática,
+ * ou o veículo saiu mesmo — e o próximo ponto já vem em movimento —,
+ * ou nunca saiu, e nada é carimbado.
+ */
+function afastouDaBase_(posicoes, i, manobraMs) {
+  var ref = posicoes[i - 1];            // último ponto ainda na base
+  var temRef = ref.lat !== null && ref.lon !== null;
+  var t = posicoes[i].dataHora.getTime();
+
+  for (var j = i; j < posicoes.length; j++) {
+    var p = posicoes[j];
+    if (p.dataHora.getTime() - t > manobraMs) break;
+    if (p.naBase) break;                // voltou: o laço de fora já trata
+    var andando = (p.velocidade !== null && p.velocidade > GPS_STOP_SPEED_KMH) || p.emMovimento;
+    if (!andando) continue;
+    if (temRef && p.lat !== null && p.lon !== null &&
+        distanciaMetros_(p.lat, p.lon, ref.lat, ref.lon) <= GPS_STOP_RADIUS_M) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
  * Saída = transição "estava na base -> saiu da base" que NÃO
  * volta dentro da janela de manobra/balança, procurada apenas
  * DENTRO da janela do dia operacional (véspera 21h -> fim do dia).
@@ -843,6 +874,14 @@ function detectarSaidaBase_(eventos, dataOperacional) {
       if (posicoes[j].naBase) { voltou = true; break; }
     }
     if (voltou) continue; // manobra / balança, não é saída de verdade
+
+    // Sair da cerca, sozinho, NÃO é sair da base. A cerca do Eclipse
+    // pisca: com o caminhão parado e desligado no pátio o relatório
+    // emite "Partida"/"Chegou" de novo e de novo, e o MESMO ponto ora
+    // resolve "GRF Distribuicao", ora "Tres Rios" — foi o que gerou as
+    // várias saídas falsas de veículos que nunca saíram.
+    // Agora a transição só vale com prova de movimento.
+    if (!afastouDaBase_(posicoes, i, manobraMs)) continue;
 
     return posicoes[i].dataHora;
   }

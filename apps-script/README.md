@@ -103,6 +103,22 @@ item da tabela que casar.
 Saída é a **transição de dentro para fora da cerca da base** dentro da janela
 do dia, que não volta em até `MAX_MANOBRA_MIN` (manobra e balança não contam).
 
+E a transição **sozinha não basta**: ela só vira saída se o veículo realmente
+se afastou — andando (velocidade acima do limiar ou status "em movimento") e a
+mais de `GPS_STOP_RADIUS_M` do último ponto ainda dentro da base.
+
+Isso existe porque **a cerca do Eclipse pisca**. Com o caminhão parado e
+desligado no pátio, o relatório emite `Partida` e `Chegou` de novo e de novo,
+e a mesma coordenada ora resolve `GRF Distribuicao`, ora `Tres Rios`. No log de
+16/09 um veículo teve três `Partida` (06:37, 07:01 e 07:08) sem ter saído do
+pátio; a saída de verdade foi uma só, 07:09, a 51,7 km/h na Estrada União
+Indústria. Os rótulos `Partida`/`Chegou` do Eclipse **nunca** são lidos como
+saída — o que vale é posição mais movimento.
+
+O horário carimbado continua sendo o da transição, não o da confirmação. Se a
+prova de movimento só chegar no ciclo seguinte, a hora da saída não muda —
+atrasa a exibição em um ciclo, nunca o registro.
+
 Quando não existe essa transição na janela, o veículo pode ter saído antes de
 a janela abrir — ou pode estar apenas estacionado longe da base. Os dois casos
 se parecem no GPS, então o segundo só é aceito como saída **com prova de

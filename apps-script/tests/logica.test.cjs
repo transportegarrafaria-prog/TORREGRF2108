@@ -438,5 +438,58 @@ console.log("\n8) Horário-limite por rota");
   ok("PARAIBA DO SUL -> 07:00", getHorarioLimite_("PARAIBA DO SUL") === "07:00");
 }
 
+console.log("\n7.8) CERCA PISCANDO — 'Partida' no pátio não é saída");
+{
+  // Caso real do relatório Eclipse de 16/09/2026. Com o caminhão parado e
+  // desligado no pátio, o Eclipse emitiu "Partida" às 06:37, 07:01 e 07:08,
+  // e o MESMO ponto ora resolvia "GRF Distribuicao", ora "Tres Rios".
+  // A saída de verdade foi uma só: 07:09, a 51,7 km/h na Estrada União
+  // Indústria. Nenhuma das três "Partidas" pode virar saída.
+  const DIA16 = new Date(2026, 8, 16, 12, 0, 0);
+  const ponto = (hora, status, lat, lon, vel, naCerca) => {
+    const [h, mi, se] = hora.split(":").map(Number);
+    return {
+      Timestamp_date: "2026/09/16",
+      Timestamp_time: `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}:${String(se).padStart(2, "0")}`,
+      StatusCode_desc: status, GPSPoint_lat: lat, GPSPoint_lon: lon, Speed: vel,
+      Geozone: naCerca ? "grf_distribuicao" : "",
+      Address: naCerca ? "GRF Distribuicao" : "Tres Rios, Rio de Janeiro - Brazil",
+    };
+  };
+  const log = [
+    ponto("06:31:19", "Desligado", -22.08001, -43.21258, 0, true),
+    ponto("06:37:17", "Partida",   -22.08002, -43.21274, 0, true),
+    ponto("06:37:19", "Desligado", -22.08002, -43.21274, 0, false),
+    ponto("06:43:19", "Desligado", -22.08002, -43.21267, 0, false),
+    ponto("06:49:18", "Chegou",    -22.08004, -43.21257, 0, true),
+    ponto("07:01:17", "Partida",   -22.08002, -43.21271, 0, true),
+    ponto("07:01:19", "Desligado", -22.08002, -43.21271, 0, false),
+    ponto("07:05:04", "Ignicao Ligada", -22.08002, -43.21268, 0, false),
+    ponto("07:07:04", "Ligado",    -22.08008, -43.21249, 0, true),
+    ponto("07:08:02", "Partida",   -22.07987, -43.21419, 0, true),
+    ponto("07:09:04", "Em Movimento", -22.08460, -43.21756, 51.7, false),
+    ponto("07:10:04", "Em Movimento", -22.09110, -43.21971, 13.2, false),
+    ponto("07:12:04", "Em Movimento", -22.09982, -43.21516, 26.1, false),
+  ];
+  const saida = detectarSaidaBase_(log, DIA16);
+  ok("a saída de verdade é 07:09", saida && saida.getHours() === 7 && saida.getMinutes() === 9,
+     saida ? saida.toString() : "null");
+
+  // Pior caso: um único ponto com jitter para fora, parado e desligado,
+  // no FIM do log — não há leitura seguinte para desmentir. Antes isso
+  // virava saída carimbada e congelava pelo dia inteiro.
+  const soJitter = log.slice(0, 9).concat([
+    ponto("07:20:00", "Desligado", -22.08340, -43.21500, 0, false),
+  ]);
+  ok("jitter parado no fim do log não vira saída", detectarSaidaBase_(soJitter, DIA16) === null);
+
+  // E não é só a cerca que segura: mesmo sem Geozone nenhum, o raio da
+  // base + a prova de movimento continuam achando a saída certa.
+  const semCerca = log.map((e) => Object.assign({}, e, { Geozone: "", Address: "Tres Rios, Rio de Janeiro - Brazil" }));
+  const s2 = detectarSaidaBase_(semCerca, DIA16);
+  ok("sem Geozone a saída continua 07:09", s2 && s2.getHours() === 7 && s2.getMinutes() === 9,
+     s2 ? s2.toString() : "null");
+}
+
 console.log(falhas ? `\n${falhas} FALHA(S)\n` : "\nTodos os testes passaram\n");
 process.exit(falhas ? 1 : 0);
