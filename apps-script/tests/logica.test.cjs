@@ -259,14 +259,17 @@ console.log("\n7.3) SAÍDA FALSA — veículo parado fora da base não saiu");
   const dt = detectarSaidaBase_(parado, DIA25);
   ok("parado fora da base NÃO gera saída", dt === null, dt);
 
-  // mas um veículo que já estava viajando quando a janela abriu ainda é pego
+  // Um veículo que só aparece ANDANDO fora da base, sem nunca ser visto
+  // nela, não saiu dela: pode estar voltando da rota de ontem. Antes isso
+  // virava saída ("já estava viajando") e era o bug do caminhão que chega
+  // na GRF depois das 21h — 13 saídas falsas entre 21:00 e 21:20 no Histórico.
   const viajando = [
     ev(2026, 8, 24, 21, 10, { GPSPoint_lat: -22.3, GPSPoint_lon: -43.5, Geozone: "", Speed: 70, StatusCode_desc: "Em Movimento" }),
     ev(2026, 8, 24, 21, 40, { GPSPoint_lat: -22.4, GPSPoint_lon: -43.6, Geozone: "", Speed: 68, StatusCode_desc: "Em Movimento" }),
     ev(2026, 8, 25, 1, 0, { GPSPoint_lat: -22.6, GPSPoint_lon: -43.8, Geozone: "", Speed: 65, StatusCode_desc: "Em Movimento" }),
   ];
   const dtViagem = detectarSaidaBase_(viajando, DIA25);
-  ok("veículo em movimento fora da base continua sendo pego", dtViagem !== null, dtViagem);
+  ok("andando fora da base, sem passar por ela, NÃO é saída", dtViagem === null, dtViagem);
 
   // e a transição normal a partir da base segue funcionando
   const normal = [
@@ -557,6 +560,120 @@ console.log("\n7.9) MANOBRA — cadastrar a placa antes tem que dar o mesmo que 
   // A confirmação vem pela distância (2,2 km às 08:02), não pelas 2 horas
   // de janela de manobra: o painel não pode atrasar a saída em 2 horas.
   ok("carimba ja no 1o ciclo depois da saida (08:10)", cicloQueTravou === 8 * 60 + 10, cicloQueTravou);
+}
+
+console.log("\n7.10) OPERAÇÃO REAL — cada cenário dá o mesmo resultado ao vivo e depois");
+{
+  // Dia operacional 23/09 (véspera 22/09). Cada cenário roda duas vezes:
+  //   AO VIVO  = de 10 em 10 min, com o log só até aquele momento, e a
+  //              primeira saída encontrada TRAVA (é o que o gatilho faz);
+  //   DEPOIS   = uma vez, com o log inteiro (placa cadastrada depois).
+  // As duas têm que dar a saída certa. Se o ao vivo carimbar qualquer coisa
+  // antes, o carimbo congela e está errado.
+  const D = new Date(2026, 8, 23, 12, 0, 0);
+  const LIMOEIRO = { lat: -22.14359, lon: -43.2848 };            // ~10 km da base
+  const rumo = (m) => ({                                           // m metros da base
+    lat: BASE_GRF.lat - m / 111320,
+    lon: BASE_GRF.lon - m / (111320 * Math.cos((BASE_GRF.lat * Math.PI) / 180)),
+  });
+  // dia: 22 = véspera, 23 = dia operacional
+  const P = (dia, h, mi, onde, vel) => {
+    const c = typeof onde === "number" ? rumo(onde) : onde;
+    const dBase = distanciaMetros_(c.lat, c.lon, BASE_GRF.lat, BASE_GRF.lon);
+    const naCerca = dBase <= BASE_GRF.raio;
+    return {
+      Timestamp_date: `2026/09/${dia}`,
+      Timestamp_time: `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}:00`,
+      StatusCode_desc: vel > 3 ? "Em Movimento" : "Desligado",
+      GPSPoint_lat: c.lat, GPSPoint_lon: c.lon, Speed: vel,
+      Geozone: naCerca ? "grf_distribuicao" : "",
+      Address: naCerca ? "GRF Distribuicao" : "Tres Rios - Brazil",
+    };
+  };
+  const parado = (dia, h0, h1, onde) => {            // um ponto a cada 30 min
+    const r = [];
+    for (let m = h0 * 60; m <= h1 * 60; m += 30) r.push(P(dia, Math.floor(m / 60), m % 60, onde, 0));
+    return r;
+  };
+  const tempo = (e) => {
+    const [H, M] = e.Timestamp_time.split(":").map(Number);
+    return new Date(2026, 8, Number(e.Timestamp_date.slice(-2)), H, M, 0).getTime();
+  };
+  const hhmm = (d) => (d ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : "nenhuma");
+
+  function aoVivo(log, limite) {
+    const real = Date.now;
+    let travada = null;
+    for (let t = new Date(2026, 8, 22, 14, 0).getTime(); t <= new Date(2026, 8, 23, 14, 0).getTime() && !travada; t += 600000) {
+      Date.now = () => t;
+      const vis = log.filter((e) => tempo(e) <= t);
+      const d = vis.length ? detectarSaidaBase_(vis, D, limite) : null;
+      if (d && d.getTime() <= t) travada = d;
+    }
+    Date.now = real;
+    return travada;
+  }
+  function cenario(nome, limite, log, esperado) {
+    log.sort((a, b) => tempo(a) - tempo(b));
+    const vivo = aoVivo(log, limite);
+    const depois = detectarSaidaBase_(log, D, limite);
+    ok(`${nome} — ao vivo: ${hhmm(vivo)}`, hhmm(vivo) === esperado, `esperado ${esperado}`);
+    ok(`${nome} — depois: ${hhmm(depois)}`, hhmm(depois) === esperado, `esperado ${esperado}`);
+  }
+
+  // A) O caso relatado: chega na GRF depois das 21h voltando da rota de
+  //    ontem, dorme na base, sai às 05:12. Antes virava "saída 21:0x".
+  cenario("chegou 22:20 voltando da rota, saiu 05:12 (Petrópolis 06:00)", "06:00", [
+    P(22, 20, 30, 60000, 70), P(22, 21, 0, 40000, 70), P(22, 21, 30, 20000, 60),
+    P(22, 22, 0, 5000, 40), P(22, 22, 10, 1200, 20), P(22, 22, 20, 0, 0),
+    ...parado(22, 22.5, 23.5, 0), ...parado(23, 0, 5, 0),
+    P(23, 5, 10, 0, 8), P(23, 5, 12, 900, 45), P(23, 5, 15, 3000, 60),
+    P(23, 5, 25, 12000, 70), P(23, 5, 45, 35000, 75),
+  ], "05:12");
+
+  // B) Caso real do LSB2J94 (Petrópolis, "saiu 23:05"): sai da base 23:05
+  //    para dormir no Posto Limoeiro, volta 04:35, carrega, sai 05:32.
+  cenario("dormiu no posto, saiu de verdade 05:32 (Petrópolis 06:00)", "06:00", [
+    ...parado(22, 21, 23, 0),
+    P(22, 23, 5, 900, 40), P(22, 23, 8, 4000, 60), P(22, 23, 15, LIMOEIRO, 0),
+    ...parado(23, 0, 4, LIMOEIRO),
+    P(23, 4, 20, LIMOEIRO, 30), P(23, 4, 28, 3000, 50), P(23, 4, 35, 0, 0),
+    ...parado(23, 5, 5, 0),
+    P(23, 5, 32, 900, 45), P(23, 5, 35, 3000, 60), P(23, 5, 50, 20000, 75), P(23, 6, 20, 50000, 75),
+  ], "05:32");
+
+  // C) Saída antecipada LEGÍTIMA: Rio (limite 03:00) sai 21:44 e pega a
+  //    estrada. Tem que valer, com a hora real de 21:44.
+  cenario("Rio saiu cedo de verdade, 21:44 (Rio 03:00)", "03:00", [
+    ...parado(22, 19, 21.5, 0),
+    P(22, 21, 44, 900, 45), P(22, 21, 50, 6000, 65), P(22, 22, 5, 22000, 80),
+    P(22, 23, 0, 90000, 80), P(23, 0, 30, 140000, 40), ...parado(23, 1, 5, 140000),
+  ], "21:44");
+
+  // D) Lagos (limite 00:00) saindo 20:40 — antes ficava fora da janela das
+  //    21h e só era pego pelo "plano B". Agora é transição normal.
+  cenario("Lagos saiu 20:40 (Lagos 00:00)", "00:00", [
+    ...parado(22, 16, 20.5, 0),
+    P(22, 20, 40, 900, 45), P(22, 20, 45, 4000, 65), P(22, 21, 10, 30000, 80), P(22, 23, 0, 200000, 80),
+  ], "20:40");
+
+  // E) Posto Limoeiro a noite toda, não vem para a base: não saiu.
+  cenario("parado no posto a noite toda (Petrópolis 06:00)", "06:00",
+    [...parado(22, 21, 23.5, LIMOEIRO), ...parado(23, 0, 12, LIMOEIRO)], "nenhuma");
+
+  // F) Sai do posto, vem para a base carregar e sai 05:40 — a viagem
+  //    posto -> base NÃO é saída.
+  cenario("veio do posto, carregou, saiu 05:40 (Petrópolis 06:00)", "06:00", [
+    ...parado(22, 21, 23.5, LIMOEIRO), ...parado(23, 0, 4, LIMOEIRO),
+    P(23, 4, 30, LIMOEIRO, 40), P(23, 4, 38, 4000, 50), P(23, 4, 45, 0, 0), ...parado(23, 5, 5.5, 0),
+    P(23, 5, 40, 900, 45), P(23, 5, 45, 5000, 65), P(23, 6, 10, 35000, 75),
+  ], "05:40");
+
+  // G) Normal: dormiu na base, saiu 04:30.
+  cenario("normal, saiu 04:30 (Petrópolis 06:00)", "06:00", [
+    ...parado(22, 21, 23.5, 0), ...parado(23, 0, 4, 0),
+    P(23, 4, 30, 900, 45), P(23, 4, 35, 5000, 65), P(23, 5, 0, 30000, 75),
+  ], "04:30");
 }
 
 console.log(falhas ? `\n${falhas} FALHA(S)\n` : "\nTodos os testes passaram\n");

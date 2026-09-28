@@ -147,16 +147,33 @@ O teste 7.9 mede exatamente isso: replica o log de 10 em 10 minutos (placa
 cadastrada antes) e de uma vez (placa cadastrada depois), e exige o mesmo
 resultado nos dois.
 
-Quando não existe essa transição na janela, o veículo pode ter saído antes de
-a janela abrir — ou pode estar apenas estacionado longe da base. Os dois casos
-se parecem no GPS, então o segundo só é aceito como saída **com prova de
-movimento**: velocidade acima do limiar e deslocamento real em relação ao
-ponto onde a janela abriu.
+### A janela é de cada rota
 
-Sem essa exigência, dois veículos que passaram a noite num posto a 10 km da
-base, com o motor desligado e a mesma coordenada, tiveram o primeiro ponto de
-GPS depois das 21h da véspera registrado como "saída às 21:00" — e, como 21h
-vem antes do limite das 06h, ainda apareceram como "No prazo".
+A saída é procurada a partir de `ANTECEDENCIA_MAX_H` (8h) antes do horário-limite
+da rota — Lagos 00:00 a partir das 16:00 da véspera, Rio 03:00 a partir das
+19:00, Petrópolis 06:00 a partir das 22:00. Antes era 21:00 para todo mundo, e
+isso gerava os dois erros mais comuns do Histórico:
+
+| O que acontecia | Exemplo real | Por quê |
+|---|---|---|
+| caminhão chegando na GRF depois das 21h virava saída | 13 saídas entre 21:00 e 21:20 da véspera (HJL5J40, TTW8F31, CHP9C36…) | fora da base quando a janela abria + andando = "já estava viajando" |
+| motorista indo dormir no posto virava saída | LSB2J94 Petrópolis "saiu 23:05" | Petrópolis só sai de madrugada, mas a janela já estava aberta |
+
+As regras agora:
+
+- **Saída só existe se o GPS viu o caminhão na base e depois saindo.** Quem
+  aparece andando fora sem passar pela base — voltando da rota, vindo do posto
+  para carregar — não saiu. O antigo "já estava viajando quando a janela abriu"
+  foi removido; ele existia só porque Lagos saindo 20:40 ficava fora da janela
+  das 21h, e com a janela por rota essa saída cai dentro.
+- **Saída antecipada** — mais de `ANTECEDENCIA_NORMAL_H` (4h) antes do limite —
+  só vale se o caminhão não voltou até o horário normal e foi a mais de
+  `DIST_ESTRADA_M` (20 km) da base. O Posto Limoeiro fica a ~10 km: dormir lá
+  nunca passa. Rio saindo 22h e pegando a BR passa, com a hora real.
+
+O teste 7.10 roda sete cenários da operação ao vivo (de 10 em 10 minutos) e
+depois (log inteiro), e exige a saída certa nos dois. Contra o script anterior,
+quatro deles erravam.
 
 ### Saiu, mas sem hora
 

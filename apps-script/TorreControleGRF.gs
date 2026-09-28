@@ -29,11 +29,16 @@
       ainda não saiu, o contador corre só até o fim do dia
       operacional, então linha antiga não acumula mais "+79h".
 
-   4) JANELA DE DETECÇÃO PRESA AO DIA OPERACIONAL
-      Saída: da véspera 21:00 até o fim do dia operacional.
+   4) SAÍDA PROCURADA NO HORÁRIO DE CADA ROTA
+      A saída é procurada a partir de 8h antes do horário-limite
+      da rota (Lagos 00:00 -> 16:00 da véspera; Rio 03:00 -> 19:00;
+      Petrópolis 06:00 -> 22:00), e não mais das 21h para todos.
+      Saída só existe se o GPS viu o caminhão NA BASE e depois
+      saindo: quem chega na GRF voltando da rota, ou sai do posto
+      para vir carregar, não é saída. Saída mais de 4h antes do
+      limite só vale se ele pegou estrada (20 km) e não voltou —
+      é o que separa a saída cedo do motorista indo dormir no posto.
       Chegada: até o meio-dia seguinte (viagem que vira a noite).
-      Sem isso, uma programação antiga capturava movimento de
-      dias depois.
 
    5) ESTADO OPERACIONAL ÚNICO (os cards do painel)
       Cada veículo recebe UM estado, e os cards, o gráfico de
@@ -111,6 +116,24 @@ var BASE_GRF = { lat: -22.08021, lon: -43.21244, raio: 300 };
 // A partir desta distância da base a saída é definitiva na hora: manobra
 // e balança não chegam tão longe, então não há o que esperar para confirmar.
 var DIST_SAIDA_DEFINITIVA_M = 1500;
+
+// JANELA POR ROTA. A saída de cada rota é procurada perto do horário dela,
+// e não mais a partir das 21h da véspera para todo mundo. Com as 21h fixas,
+// um caminhão de Petrópolis (limite 06:00) que estava voltando da rota de
+// ontem, ou que ia dormir no posto, virava "saída às 21:00 — no prazo".
+//
+//   limite - ANTECEDENCIA_MAX_H     começa a procurar
+//   limite - ANTECEDENCIA_NORMAL_H  daqui em diante é horário normal de saída
+//
+// Entre as duas, a saída é "antecipada" e só vale se o caminhão pegou
+// estrada de verdade (DIST_ESTRADA_M) e não voltou. Medido no Histórico
+// (ago-set/2026): saída real a mais de 4h do limite é rara, e todas as de
+// 7h a 9h antes eram falsas.
+var ANTECEDENCIA_MAX_H = 8;
+var ANTECEDENCIA_NORMAL_H = 4;
+// O Posto Limoeiro, onde motorista dorme, fica a ~10 km da base.
+// 20 km é estrada: posto, casa e recado não chegam lá.
+var DIST_ESTRADA_M = 20000;
 
 // Pontos de apoio / transbordo (chegada por coordenada).
 var TRANSBORDOS = [
@@ -371,14 +394,26 @@ function combinarDataHora_(dataBase, hh, mm) {
 }
 
 /**
- * Janela do dia operacional. Fora dela nada é detectado — é o que
- * impede uma programação antiga de capturar movimento de dias depois.
+ * Janela de saída. Fora dela nada é detectado.
+ *
+ * Com o horário-limite da rota, a janela abre ANTECEDENCIA_MAX_H antes
+ * dele (Lagos 00:00 -> 16:00 da véspera; Rio 03:00 -> 19:00; Petrópolis
+ * 06:00 -> 22:00) e `normal` marca onde começa o horário normal de saída.
+ * Sem limite (diagnóstico antigo), vale a regra fixa das 21h.
  */
-function janelaSaida_(dataOper) {
+function janelaSaida_(dataOper, horarioLimite) {
   if (!dataValida_(dataOper)) return null;
-  var ini = new Date(dataOper.getFullYear(), dataOper.getMonth(), dataOper.getDate() - 1, HORA_INICIO_VESPERA, 0, 0);
   var fim = new Date(dataOper.getFullYear(), dataOper.getMonth(), dataOper.getDate(), 23, 59, 59);
-  return { ini: ini.getTime(), fim: Math.min(fim.getTime(), Date.now()) };
+  var limite = horarioLimite ? dataHoraLimite_(dataOper, horarioLimite) : null;
+  var ini, normal;
+  if (dataValida_(limite)) {
+    ini = limite.getTime() - ANTECEDENCIA_MAX_H * 3600000;
+    normal = limite.getTime() - ANTECEDENCIA_NORMAL_H * 3600000;
+  } else {
+    ini = new Date(dataOper.getFullYear(), dataOper.getMonth(), dataOper.getDate() - 1, HORA_INICIO_VESPERA, 0, 0).getTime();
+    normal = ini;
+  }
+  return { ini: ini, normal: normal, fim: Math.min(fim.getTime(), Date.now()) };
 }
 function janelaChegada_(dataOper) {
   if (!dataValida_(dataOper)) return null;
@@ -871,14 +906,44 @@ function saidaDefinitiva_(posicoes, i, manobraMs, agoraMs) {
 }
 
 /**
+ * Saída ANTECIPADA — o caminhão deixou a base antes do horário normal de
+ * saída da rota. Pode ser a saída de verdade (Rio saindo 22h para um limite
+ * de 03:00) ou pode ser o motorista indo dormir no posto, em casa, abastecer.
+ *
+ * Só é saída se as duas coisas acontecerem:
+ *   - não voltou para a base até o horário normal de saída começar
+ *     (nem dentro da janela de manobra); e
+ *   - foi longe — DIST_ESTRADA_M, além de posto e casa.
+ *
+ * Devolve "sim", "nao" ou "aguardar" (ainda não dá para saber: o próximo
+ * ciclo decide, e nada é carimbado até lá).
+ */
+function saidaAntecipada_(posicoes, i, janela, manobraMs) {
+  var t = posicoes[i].dataHora.getTime();
+  var horizonte = Math.max(janela.normal, t + manobraMs);
+  var longe = false;
+  for (var j = i; j < posicoes.length; j++) {
+    var p = posicoes[j];
+    if (p.naBase) {
+      if (p.dataHora.getTime() <= horizonte) return "nao"; // voltou cedo: não era a viagem
+      break;                                              // voltou depois: só conta o que fez antes
+    }
+    if (!longe && p.lat !== null && p.lon !== null &&
+        distanciaMetros_(p.lat, p.lon, BASE_GRF.lat, BASE_GRF.lon) >= DIST_ESTRADA_M) longe = true;
+  }
+  if (janela.fim < horizonte) return "aguardar";
+  return longe ? "sim" : "nao";
+}
+
+/**
  * Saída = transição "estava na base -> saiu da base" que NÃO
  * volta dentro da janela de manobra/balança, procurada apenas
  * DENTRO da janela do dia operacional (véspera 21h -> fim do dia).
  * Fora dessa janela nada é considerado: é o que impede uma
  * programação antiga de "achar" uma saída de dias depois.
  */
-function detectarSaidaBase_(eventos, dataOperacional) {
-  var janela = janelaSaida_(dataOperacional);
+function detectarSaidaBase_(eventos, dataOperacional, horarioLimite) {
+  var janela = janelaSaida_(dataOperacional, horarioLimite);
   if (!eventos.length || !janela || janela.fim <= janela.ini) return null;
 
   var dentro = eventos.filter(function(ev) {
@@ -903,6 +968,15 @@ function detectarSaidaBase_(eventos, dataOperacional) {
     if (!(posicoes[i - 1].naBase && !posicoes[i].naBase)) continue;
 
     var t = posicoes[i].dataHora.getTime();
+
+    // Antes do horário normal da rota: regra mais dura (ver saidaAntecipada_).
+    if (t < janela.normal) {
+      var antecipada = saidaAntecipada_(posicoes, i, janela, manobraMs);
+      if (antecipada === "sim") return posicoes[i].dataHora;
+      if (antecipada === "aguardar") return null;
+      continue;
+    }
+
     var voltou = false;
     for (var j = i + 1; j < posicoes.length; j++) {
       if (posicoes[j].dataHora.getTime() - t > manobraMs) break;
@@ -926,34 +1000,19 @@ function detectarSaidaBase_(eventos, dataOperacional) {
     return posicoes[i].dataHora;
   }
 
-  // Nenhuma transição base -> fora dentro da janela.
+  // Nenhuma transição base -> fora que valha: NÃO SAIU.
   //
-  // Isso pode significar duas coisas MUITO diferentes:
-  //   a) o veículo saiu antes da janela começar e já estava viajando;
-  //   b) o veículo simplesmente está estacionado longe da base — posto,
-  //      pátio, oficina, casa do motorista — e não saiu para lugar nenhum.
+  // Até aqui existia um "plano B": caminhão fora da base quando a janela
+  // abria, e que andava, era dado como "já tinha saído e estava viajando".
+  // Era exatamente o caminhão VOLTANDO para a GRF depois das 21h — ou
+  // saindo do posto para vir carregar. O Histórico tem 13 saídas carimbadas
+  // entre 21:00 e 21:20 da véspera por causa disso (Petrópolis, Vassouras,
+  // Sapucaia, Teresópolis, Nova Friburgo, Rio — até 9h antes do limite).
   //
-  // Antes o código assumia sempre (a) e carimbava o primeiro evento da
-  // janela como saída. Foi o que aconteceu com dois veículos parados e
-  // desligados num posto a 10 km da base: o primeiro ponto de GPS depois
-  // das 21h da véspera virou "saída às 21:00", e como 21h é antes do
-  // horário-limite das 06h, ainda apareceram como "No prazo".
-  //
-  // Agora (a) só é aceito com prova de movimento: velocidade acima do
-  // limiar (ou status "em movimento") E deslocamento real em relação ao
-  // ponto onde a janela começou. Parado é parado — não saiu.
-  if (posicoes[0].naBase) return null;
-
-  var partida = posicoes[0];
-  for (var k = 1; k < posicoes.length; k++) {
-    var p = posicoes[k];
-    if (p.naBase) break; // entrou na base: quem vale é a transição, já tratada acima
-    var andando = (p.velocidade !== null && p.velocidade > GPS_STOP_SPEED_KMH) || p.emMovimento;
-    if (!andando) continue;
-    if (partida.lat === null || partida.lon === null || p.lat === null || p.lon === null) continue;
-    if (distanciaMetros_(p.lat, p.lon, partida.lat, partida.lon) <= GPS_STOP_RADIUS_M) continue;
-    return p.dataHora;
-  }
+  // O plano B existia porque a janela começava às 21h para todo mundo e
+  // uma saída de Lagos às 20:40 ficava de fora. Com a janela por rota, essa
+  // saída cai dentro da janela e é vista como transição normal. Saída só
+  // existe se o GPS mostrou o caminhão NA BASE e depois saindo dela.
   return null;
 }
 
@@ -1017,8 +1076,8 @@ function detectarChegadaTransbordo_(eventos, transbordoCfg, dataOperacional, dat
  * No segundo caso a saída é registrada SEM horário: vira "Conferir
  * horário" no painel, e a operação digita a hora certa na planilha.
  */
-function saidaForaDaJanela_(eventos, dataOperacional) {
-  var janela = janelaSaida_(dataOperacional);
+function saidaForaDaJanela_(eventos, dataOperacional, horarioLimite) {
+  var janela = janelaSaida_(dataOperacional, horarioLimite);
   if (!eventos || !eventos.length || !janela) return false;
 
   var primeiro = parseDataHoraEvento_(eventos[0]);
@@ -1167,10 +1226,10 @@ function resolverRegistroDoDia_(item, eventos, agoraMs) {
 
   var saiuSemHora = false;
   if (!respeitarSaida && !dtSaida) {
-    var det = detectarSaidaBase_(eventos || [], item.dataOperacional);
+    var det = detectarSaidaBase_(eventos || [], item.dataOperacional, item.horarioLimite);
     if (det && det.getTime() <= agoraMs) { dtSaida = det; novos++; }
     // sem hora detectável, mas o log prova que ele não está mais na base
-    else if (saidaForaDaJanela_(eventos || [], item.dataOperacional)) saiuSemHora = true;
+    else if (saidaForaDaJanela_(eventos || [], item.dataOperacional, item.horarioLimite)) saiuSemHora = true;
   }
   if (!respeitarChegada && item.transbordoCfg && dtSaida && !dtChegada) {
     var detCheg = detectarChegadaTransbordo_(eventos || [], item.transbordoCfg, item.dataOperacional, dtSaida);
@@ -1821,10 +1880,7 @@ function diagnosticarDeteccaoDoDia() {
   var prog = coletarProgramacao_(sheet, col, garantirColunaTrava_(sheet));
   if (!prog.itens.length) { Logger.log("Nenhum veículo na Programação."); return; }
 
-  var janela = janelaSaida_(prog.dataOperacional);
   Logger.log("Data operacional: " + prog.dataAlvo + " | " + prog.itens.length + " veículos");
-  Logger.log("Janela de saída: " + Utilities.formatDate(new Date(janela.ini), GPS_TZ, "dd/MM HH:mm")
-    + " -> " + Utilities.formatDate(new Date(janela.fim), GPS_TZ, "dd/MM HH:mm"));
   Logger.log("Limite de pontos por placa: " + GPS_MONITOR_LIMIT);
   Logger.log("");
 
@@ -1833,7 +1889,11 @@ function diagnosticarDeteccaoDoDia() {
   var resumo = { detectada: 0, travada: 0, travadaSemRegistro: 0, semHora: 0, naBase: 0, semGps: 0 };
 
   prog.itens.forEach(function(item) {
-    var linhas = [item.placa + "  (" + item.destino + ")"];
+    // cada rota tem a sua janela, presa ao horário-limite dela
+    var janela = janelaSaida_(item.dataOperacional, item.horarioLimite);
+    var fmt = function(ms) { return Utilities.formatDate(new Date(ms), GPS_TZ, "dd/MM HH:mm"); };
+    var linhas = [item.placa + "  (" + item.destino + ", limite " + item.horarioLimite + ")",
+      "  procura saída de " + fmt(janela.ini) + " | horário normal a partir de " + fmt(janela.normal)];
 
     if (dataValida_(item.saidaTravada)) {
       linhas.push("  JÁ TRAVADA em " + Utilities.formatDate(item.saidaTravada, GPS_TZ, "dd/MM HH:mm")
@@ -1878,11 +1938,11 @@ function diagnosticarDeteccaoDoDia() {
     var dentroBase = naJanela.filter(estaNaBase_).length;
     linhas.push("  pontos na janela: " + naJanela.length + " | dentro da cerca da base: " + dentroBase);
 
-    var det = detectarSaidaBase_(evs, item.dataOperacional);
+    var det = detectarSaidaBase_(evs, item.dataOperacional, item.horarioLimite);
     if (det) {
       linhas.push("  SAÍDA DETECTADA: " + Utilities.formatDate(det, GPS_TZ, "dd/MM HH:mm"));
       resumo.detectada++;
-    } else if (saidaForaDaJanela_(evs, item.dataOperacional)) {
+    } else if (saidaForaDaJanela_(evs, item.dataOperacional, item.horarioLimite)) {
       linhas.push("  SAIU, HORA DESCONHECIDA: fora da base, mas o log não alcança a saída");
       linhas.push("  -> digite a hora certa em Hora Saída na Programação");
       resumo.semHora++;
@@ -1990,7 +2050,7 @@ function diagnosticarPlaca() {
   if (!busca.ok) { Logger.log("GPS não respondeu: " + busca.erro); return; }
   Logger.log("Conta: " + busca.contaNome + " | eventos recebidos: " + busca.eventos.length);
 
-  var dtSaida = detectarSaidaBase_(busca.eventos, item.dataOperacional);
+  var dtSaida = detectarSaidaBase_(busca.eventos, item.dataOperacional, item.horarioLimite);
   Logger.log("Saída que seria detectada agora: " + (dtSaida ? Utilities.formatDate(dtSaida, GPS_TZ, "dd/MM HH:mm") : "NENHUMA"));
 
   if (item.transbordoCfg) {
