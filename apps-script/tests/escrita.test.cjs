@@ -165,6 +165,20 @@ global.UrlFetchApp = {
 global.ScriptApp = { getProjectTriggers: () => [] };
 global.ContentService = { createTextOutput: (t) => ({ setMimeType: () => t }), MimeType: { JSON: "json" } };
 
+// RELÓGIO FIXO. O ranking corta a janela de HISTORICO_DIAS com new Date(),
+// e o restante do arquivo trabalha com o dia operacional 26/08/2026. Sem
+// fixar o relógio, este teste passava em agosto e quebrava sozinho 30 dias
+// depois: as linhas do fixture saíam da janela e o ranking vinha vazio.
+// 27/08 00:00 = dia operacional fechado, igual ao que acontecia antes.
+const AGORA = new Date(2026, 7, 27, 0, 0, 0).getTime();
+const DateReal = Date;
+global.Date = class extends DateReal {
+  constructor() {
+    super(...(arguments.length ? arguments : [AGORA]));
+  }
+  static now() { return AGORA; }
+};
+
 vm.runInThisContext(fs.readFileSync(path.join(__dirname, "..", "TorreControleGRF.gs"), "utf8"));
 
 /* ---------- montagem ---------- */

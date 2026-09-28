@@ -491,5 +491,73 @@ console.log("\n7.8) CERCA PISCANDO — 'Partida' no pátio não é saída");
      s2 ? s2.toString() : "null");
 }
 
+console.log("\n7.9) MANOBRA — cadastrar a placa antes tem que dar o mesmo que depois");
+{
+  // A operação notou que cadastrar a placa DEPOIS de todo mundo sair
+  // acertava mais os horários. Motivo: o teste de manobra olha para a
+  // FRENTE ("voltou à base em até MAX_MANOBRA_MIN?"), e rodando ao vivo,
+  // de 10 em 10 minutos, esse futuro ainda não existe. O script via o
+  // caminhão na balança do outro lado da estrada, carimbava, e congelava.
+  const DIA16 = new Date(2026, 8, 16, 12, 0, 0);
+  const desloc = (m) => ({
+    lat: BASE_GRF.lat - m / 111320,
+    lon: BASE_GRF.lon - m / (111320 * Math.cos((BASE_GRF.lat * Math.PI) / 180)),
+  });
+  const pt = (h, mi, metros, vel, status) => {
+    const c = metros === 0 ? BASE_GRF : desloc(metros);
+    const naCerca = metros <= BASE_GRF.raio;
+    return {
+      Timestamp_date: "2026/09/16",
+      Timestamp_time: `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}:00`,
+      StatusCode_desc: status, GPSPoint_lat: c.lat, GPSPoint_lon: c.lon, Speed: vel,
+      Geozone: naCerca ? "grf_distribuicao" : "",
+      Address: naCerca ? "GRF Distribuicao" : "Tres Rios - Brazil",
+    };
+  };
+
+  // Sai da cerca às 06:00 rumo à balança (700 m), fica parado lá, volta
+  // 06:18, e só às 08:01 sai de verdade para a estrada.
+  const log = [
+    pt(5, 30, 0, 0, "Desligado"), pt(5, 50, 0, 0, "Ligado"),
+    pt(6, 0, 120, 8, "Em Movimento"), pt(6, 1, 400, 30, "Em Movimento"), pt(6, 3, 700, 25, "Em Movimento"),
+    pt(6, 10, 700, 0, "Desligado"),
+    pt(6, 18, 300, 15, "Em Movimento"), pt(6, 20, 0, 5, "Em Movimento"), pt(6, 30, 0, 0, "Desligado"),
+    pt(7, 30, 0, 0, "Desligado"),
+    pt(8, 0, 150, 20, "Em Movimento"), pt(8, 1, 900, 55, "Em Movimento"), pt(8, 2, 2200, 60, "Em Movimento"),
+    pt(8, 5, 6000, 70, "Em Movimento"), pt(8, 20, 25000, 80, "Em Movimento"),
+  ];
+  const minutos = (d) => (d ? d.getHours() * 60 + d.getMinutes() : null);
+
+  // "placa cadastrada depois": uma rodada só, com o log inteiro.
+  const completo = detectarSaidaBase_(log, DIA16);
+  ok("log inteiro -> saida 08:01", minutos(completo) === 8 * 60 + 1,
+     completo ? completo.toString() : "null");
+
+  // "placa cadastrada antes": roda de 10 em 10 min e trava na 1a detecção.
+  const relogioReal = Date.now;
+  let travada = null, cicloQueTravou = null;
+  for (let h = 5; h <= 9 && !travada; h++) {
+    for (let mi = 0; mi < 60 && !travada; mi += 10) {
+      const agora = new Date(2026, 8, 16, h, mi, 0).getTime();
+      Date.now = () => agora;
+      const visiveis = log.filter((e) => {
+        const [H, M] = e.Timestamp_time.split(":").map(Number);
+        return new Date(2026, 8, 16, H, M, 0).getTime() <= agora;
+      });
+      const d = visiveis.length ? detectarSaidaBase_(visiveis, DIA16) : null;
+      if (d && d.getTime() <= agora) { travada = d; cicloQueTravou = h * 60 + mi; }
+    }
+  }
+  Date.now = relogioReal;
+
+  ok("ao vivo nao carimba a manobra das 06:01", minutos(travada) !== 6 * 60 + 1,
+     travada ? travada.toString() : "null");
+  ok("ao vivo chega no mesmo 08:01 do log inteiro", minutos(travada) === minutos(completo),
+     `${travada} vs ${completo}`);
+  // A confirmação vem pela distância (2,2 km às 08:02), não pelas 2 horas
+  // de janela de manobra: o painel não pode atrasar a saída em 2 horas.
+  ok("carimba ja no 1o ciclo depois da saida (08:10)", cicloQueTravou === 8 * 60 + 10, cicloQueTravou);
+}
+
 console.log(falhas ? `\n${falhas} FALHA(S)\n` : "\nTodos os testes passaram\n");
 process.exit(falhas ? 1 : 0);

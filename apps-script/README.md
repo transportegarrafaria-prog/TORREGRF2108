@@ -119,6 +119,34 @@ O horário carimbado continua sendo o da transição, não o da confirmação. S
 prova de movimento só chegar no ciclo seguinte, a hora da saída não muda —
 atrasa a exibição em um ciclo, nunca o registro.
 
+### Por que rodar ao vivo acertava menos que rodar depois
+
+A operação percebeu que, cadastrando as placas **depois** de todo mundo sair, os
+horários batiam melhor do que cadastrando antes. O motivo é estrutural: o teste
+de manobra olha para a **frente** — "voltou à base em até `MAX_MANOBRA_MIN`?".
+Rodando de madrugada a cada `GPS_INTERVALO_MIN`, esse futuro ainda não existe. O
+script via o caminhão na balança do outro lado da estrada, carimbava, e o
+carimbo congelava. Rodando depois, com o dia inteiro no log, a volta está lá e a
+manobra é descartada.
+
+Por isso a transição só é carimbada quando a dúvida está fechada:
+
+| Situação | O que acontece |
+|---|---|
+| passou de `DIST_SAIDA_DEFINITIVA_M` (1,5 km) da base | carimba na hora — manobra não chega tão longe |
+| a janela de manobra inteira passou sem volta | carimba — a dúvida venceu |
+| nenhuma das duas ainda | não carimba nada; o próximo ciclo decide |
+
+Na prática isso não atrasa o painel. Uma saída de verdade passa de 1,5 km em
+um ou dois minutos, então ela é carimbada no **primeiro ciclo depois da saída**
+— o mesmo de antes. Quem espera é só o caso duvidoso, que era justamente o que
+vinha errado. E o horário gravado é sempre o da transição, nunca o da
+confirmação.
+
+O teste 7.9 mede exatamente isso: replica o log de 10 em 10 minutos (placa
+cadastrada antes) e de uma vez (placa cadastrada depois), e exige o mesmo
+resultado nos dois.
+
 Quando não existe essa transição na janela, o veículo pode ter saído antes de
 a janela abrir — ou pode estar apenas estacionado longe da base. Os dois casos
 se parecem no GPS, então o segundo só é aceito como saída **com prova de

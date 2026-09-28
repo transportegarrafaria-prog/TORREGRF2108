@@ -108,6 +108,10 @@ var TEXTO_BASE = "grf distribui";
 var ZONA_BASE = "grf_distribuicao";
 var BASE_GRF = { lat: -22.08021, lon: -43.21244, raio: 300 };
 
+// A partir desta distância da base a saída é definitiva na hora: manobra
+// e balança não chegam tão longe, então não há o que esperar para confirmar.
+var DIST_SAIDA_DEFINITIVA_M = 1500;
+
 // Pontos de apoio / transbordo (chegada por coordenada).
 var TRANSBORDOS = [
   { nome: "Penha RJ",        destino: ["rio de janeiro", "penha"],       lat: -22.82105, lon: -43.27655, raio: 600 },
@@ -836,6 +840,37 @@ function afastouDaBase_(posicoes, i, manobraMs) {
 }
 
 /**
+ * Já dá para CRAVAR que a transição foi uma saída, ou ainda pode ser
+ * manobra que vai voltar?
+ *
+ * O teste de manobra olha para a FRENTE: "voltou para a base em até
+ * MAX_MANOBRA_MIN?". Rodando de madrugada, a cada 10 minutos, esse futuro
+ * ainda não existe — o script vê o caminhão do lado de fora, não tem como
+ * saber que ele volta da balança dali a 18 minutos, carimba, e o carimbo
+ * congela. Rodando depois, com o dia inteiro no log, a volta está lá e a
+ * manobra é descartada. Era essa a diferença de acerto entre cadastrar a
+ * placa antes e cadastrar depois.
+ *
+ * Duas formas de fechar a questão sem esperar as 2 horas:
+ *   a) o veículo já está longe demais para ser manobra; ou
+ *   b) a janela de manobra inteira já passou sob observação, sem volta.
+ *
+ * Enquanto nenhuma das duas vale, nada é carimbado — e o ciclo seguinte
+ * decide. O horário, quando sai, continua sendo o da transição.
+ */
+function saidaDefinitiva_(posicoes, i, manobraMs, agoraMs) {
+  for (var j = i; j < posicoes.length; j++) {
+    var p = posicoes[j];
+    if (p.naBase) break;
+    if (p.lat === null || p.lon === null) continue;
+    if (distanciaMetros_(p.lat, p.lon, BASE_GRF.lat, BASE_GRF.lon) >= DIST_SAIDA_DEFINITIVA_M) return true;
+  }
+  // Tempo de relógio, não do log: se o rastreador emudecer logo depois de
+  // cruzar a cerca, a saída ainda fecha sozinha quando a janela vence.
+  return agoraMs - posicoes[i].dataHora.getTime() >= manobraMs;
+}
+
+/**
  * Saída = transição "estava na base -> saiu da base" que NÃO
  * volta dentro da janela de manobra/balança, procurada apenas
  * DENTRO da janela do dia operacional (véspera 21h -> fim do dia).
@@ -882,6 +917,11 @@ function detectarSaidaBase_(eventos, dataOperacional) {
     // várias saídas falsas de veículos que nunca saíram.
     // Agora a transição só vale com prova de movimento.
     if (!afastouDaBase_(posicoes, i, manobraMs)) continue;
+
+    // Ainda pode ser manobra: não carimba nada agora, o próximo ciclo
+    // decide. Sair daqui com null é de propósito — procurar uma transição
+    // mais adiante seria pular por cima desta, que ainda está em aberto.
+    if (!saidaDefinitiva_(posicoes, i, manobraMs, janela.fim)) return null;
 
     return posicoes[i].dataHora;
   }
