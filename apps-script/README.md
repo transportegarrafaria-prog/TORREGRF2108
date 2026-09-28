@@ -29,16 +29,29 @@ detecção do GPS:
 
 | Para… | Faça isto na Programação |
 |---|---|
-| Corrigir a hora de saída | escreva a hora certa em **Hora Saída** (`06:15`, ou `22:40 (24/08)` se foi na véspera) |
+| Corrigir a hora de saída | escreva a hora certa em **Hora Saída** (`06:15`; para Lagos, Campos, Angra e Rio pode escrever só `23:40` — o script entende que foi na véspera) |
 | Derrubar uma saída que não aconteceu | ponha **Saiu? = Não** |
 | Corrigir a chegada no ponto de apoio | escreva em **Hora Chegada** |
 | Derrubar uma chegada errada | ponha **Chegou? = Não** |
+| Trocar o veículo | troque a placa; a antiga sai do Histórico do dia (se não tinha saído) |
 
 Na rodada seguinte o script reconhece a edição, ajusta a coluna-carimbo
 correspondente e marca a linha como travada — a partir daí ele não mexe mais
 naquele campo até virar o dia. O painel passa a mostrar o seu valor na
 atualização seguinte, e o atraso é recalculado em cima da hora que você
 escreveu.
+
+**O Histórico acompanha tudo isso na mesma rodada.** Linha corrigida pela
+operação é copiada para o Histórico do jeito que está na Programação —
+inclusive "Saiu? = Não", que antes ficava com a saída velha e o atraso dela no
+ranking. A proteção "saída registrada não some do Histórico" continua valendo
+só para linhas que o script controla (Programação limpa no meio do dia).
+
+Hora sem data vale para o dia operacional, a não ser que isso a deixe mais de
+`ATRASO_MAX_H` (12h) depois do limite: aí é da véspera. Sem essa regra,
+corrigir Campos para `23:40` virava +23h40 — há três casos assim no Histórico
+de setembro. Pelo mesmo motivo, o GPS não aceita como saída de hoje uma saída
+mais de 12h depois do limite: Campos saindo 22:19 é a viagem de amanhã.
 
 A trava é **por campo**: corrigir a hora de saída de um transbordo não impede
 o script de detectar a chegada no ponto de apoio depois.

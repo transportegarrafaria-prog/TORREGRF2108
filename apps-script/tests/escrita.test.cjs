@@ -70,6 +70,10 @@ function criarSheet(nome, matriz) {
     insertColumnsAfter: (depois, quantas) => {
       for (const row of m) for (let i = 0; i < quantas; i++) row.push("");
     },
+    deleteRow: (n) => {
+      custo.escritas += m[0].length;
+      m.splice(n - 1, 1);
+    },
     getRange: (a, c, nr, nc) => {
       if (typeof a === "string") return alvo(1, 1, 1, 1); // getRange("A:A") só recebe formatação
       return alvo(a, c, nr === undefined ? 1 : nr, nc === undefined ? 1 : nc);
@@ -332,6 +336,60 @@ console.log("\n7) Horário-limite errado na planilha é corrigido pela tabela do
   atualizarMonitoramentoGPS();
   ok("mudou a tabela -> a planilha acompanha", cel(2, "Horário-Limite") === "02:30", cel(2, "Horário-Limite"));
   HORARIO_LIMITE.find((h) => h.match.includes("angra")).limite = original;
+}
+
+console.log("\n7.1) O Histórico acompanha as correções da operação");
+{
+  const linhaHist = (placa) => histSheet.matriz.slice(1).find((r) => r[1] === placa);
+  const hora = (r) => String(r[7] == null ? "" : r[7]).replace(/^'/, "");
+
+  // A) corrigir a hora: o Histórico troca a hora e o atraso
+  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS")]);
+  atualizarMonitoramentoGPS();
+  progSheet.matriz[1][C["Hora Saída"]] = "05:05";
+  atualizarMonitoramentoGPS();
+  ok("hora corrigida chega no Histórico", hora(linhaHist("KAA1A11")) === "05:05", hora(linhaHist("KAA1A11")));
+  ok("atraso recalculado no Histórico", linhaHist("KAA1A11")[8] === -55, linhaHist("KAA1A11")[8]);
+
+  // B) desfazer uma saída falsa: antes o Histórico ficava com "Sim 05:30"
+  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS")]);
+  atualizarMonitoramentoGPS();
+  progSheet.matriz[1][C["Saiu?"]] = "Não";
+  atualizarMonitoramentoGPS();
+  ok("Saiu? = Não chega no Histórico", linhaHist("KAA1A11")[6] === "Não", linhaHist("KAA1A11")[6]);
+  ok("sem a hora velha no Histórico", hora(linhaHist("KAA1A11")) === "", hora(linhaHist("KAA1A11")));
+  atualizarMonitoramentoGPS();
+  ok("e continua assim na rodada seguinte", linhaHist("KAA1A11")[6] === "Não", linhaHist("KAA1A11")[6]);
+
+  // C) trocar a placa: antes a antiga ficava como "não saiu" (caso TTW8F31)
+  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS"), linhaVazia("KBB2B22", "PETROPOLIS")]);
+  atualizarMonitoramentoGPS();
+  progSheet.matriz[2][C["Placa"]] = "KCC3C33";
+  atualizarMonitoramentoGPS();
+  ok("placa trocada sai do Histórico", !linhaHist("KBB2B22"),
+    histSheet.matriz.slice(1).map((r) => r[1]).join(","));
+  ok("placa nova entra", !!linhaHist("KCC3C33"));
+  ok("quem saiu continua", linhaHist("KAA1A11") && linhaHist("KAA1A11")[6] === "Sim");
+
+  // ...mas placa que JÁ SAIU e sumiu da Programação não é apagada
+  progSheet.matriz.splice(1, 1); // tira KAA1A11, que tinha saído
+  atualizarMonitoramentoGPS();
+  ok("saída registrada nunca é apagada", !!linhaHist("KAA1A11") && linhaHist("KAA1A11")[6] === "Sim");
+
+  // ...e dia anterior não é tocado
+  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS")]);
+  histSheet.matriz.push([D25, "KZZ9Z99", "TRANS SUL", "PETROPOLIS", "Entrega", "06:00",
+    "Não", "", 999, "Não saiu", "Não saiu", "", "", D25]);
+  atualizarMonitoramentoGPS();
+  ok("linha de outro dia fica como estava", !!linhaHist("KZZ9Z99"));
+
+  // D) Campos (limite 00:00) corrigido para "23:40", que foi na véspera
+  montarPlanilha([linhaVazia("KAA1A11", "CAMPOS")]);
+  atualizarMonitoramentoGPS();
+  progSheet.matriz[1][C["Hora Saída"]] = "23:40";
+  atualizarMonitoramentoGPS();
+  ok("23:40 em Campos é da véspera, não +23h40", linhaHist("KAA1A11")[8] === -20, linhaHist("KAA1A11")[8]);
+  ok("a planilha mostra o dia", cel(2, "Hora Saída") === "23:40 (25/08)", cel(2, "Hora Saída"));
 }
 
 console.log("\n8) Histórico grande: linhas antigas intocadas e custo limitado à janela");

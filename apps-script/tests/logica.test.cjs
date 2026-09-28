@@ -676,5 +676,33 @@ console.log("\n7.10) OPERAÇÃO REAL — cada cenário dá o mesmo resultado ao 
   ], "04:30");
 }
 
+console.log("\n7.11) Saída da viagem de AMANHÃ não vira atraso de hoje");
+{
+  // Caso real (08/09): KTO7F74 Campos, limite 00:00, "saiu 22:19" do
+  // próprio dia 08/09 = +22h19. Era a saída da viagem do dia 09.
+  const D = new Date(2026, 8, 8, 12, 0, 0);
+  const base = (h, mi, dia) => ev(2026, 9, dia, h, mi, { Speed: 0 });
+  const estrada = (h, mi, dia) => ev(2026, 9, dia, h, mi, { GPSPoint_lat: -22.3, GPSPoint_lon: -43.5,
+    Geozone: "", Address: "BR-393", Speed: 80, StatusCode_desc: "Em Movimento" });
+  const log = [base(16, 0, 7), base(22, 0, 7), base(2, 0, 8), base(12, 0, 8), base(22, 0, 8),
+    estrada(22, 19, 8), estrada(23, 30, 8)];
+  const real = Date.now; Date.now = () => new Date(2026, 8, 8, 23, 50).getTime();
+  ok("Campos saindo 22:19 do próprio dia não é saída de hoje", detectarSaidaBase_(log, D, "00:00") === null);
+  // atraso real de algumas horas continua valendo
+  const tarde = [base(16, 0, 7), base(22, 0, 7), base(2, 0, 8), estrada(3, 10, 8), estrada(4, 0, 8)];
+  const t = detectarSaidaBase_(tarde, D, "00:00");
+  ok("Campos saindo 03:10 (3h atrasado) continua valendo", t && t.getHours() === 3 && t.getMinutes() === 10, t);
+  Date.now = real;
+
+  // Hora digitada sem data: fica no dia, a não ser que passe 12h do limite
+  const h = (txt, lim) => { const d = parseHoraComDia_(txt, D, lim); return `${d.getDate()}/${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`; };
+  ok("Campos '23:40' -> véspera", h("23:40", "00:00") === "7/23:40", h("23:40", "00:00"));
+  ok("Campos '02:10' -> no dia", h("02:10", "00:00") === "8/2:10", h("02:10", "00:00"));
+  ok("Rio '22:30' -> véspera", h("22:30", "03:00") === "7/22:30", h("22:30", "03:00"));
+  ok("Rio '01:07' -> no dia", h("01:07", "03:00") === "8/1:07", h("01:07", "03:00"));
+  ok("Petrópolis '07:30' -> no dia", h("07:30", "06:00") === "8/7:30", h("07:30", "06:00"));
+  ok("com (dd/mm) manda o que foi escrito", h("23:40 (07/09)", "06:00") === "7/23:40", h("23:40 (07/09)", "06:00"));
+}
+
 console.log(falhas ? `\n${falhas} FALHA(S)\n` : "\nTodos os testes passaram\n");
 process.exit(falhas ? 1 : 0);

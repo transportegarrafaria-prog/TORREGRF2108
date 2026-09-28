@@ -135,6 +135,12 @@ var ANTECEDENCIA_NORMAL_H = 4;
 // 20 km é estrada: posto, casa e recado não chegam lá.
 var DIST_ESTRADA_M = 20000;
 
+// Nenhuma saída acontece mais de ATRASO_MAX_H depois do horário-limite:
+// passado disso é a viagem de outro dia. Vale para o GPS (Campos saindo
+// 22:19 é a viagem de AMANHÃ, não +22h19 de hoje) e para a hora digitada
+// sem data ("23:40" em Campos é da véspera, não 23:40 do próprio dia).
+var ATRASO_MAX_H = 12;
+
 // Pontos de apoio / transbordo (chegada por coordenada).
 var TRANSBORDOS = [
   { nome: "Penha RJ",        destino: ["rio de janeiro", "penha"],       lat: -22.82105, lon: -43.27655, raio: 600 },
@@ -405,15 +411,19 @@ function janelaSaida_(dataOper, horarioLimite) {
   if (!dataValida_(dataOper)) return null;
   var fim = new Date(dataOper.getFullYear(), dataOper.getMonth(), dataOper.getDate(), 23, 59, 59);
   var limite = horarioLimite ? dataHoraLimite_(dataOper, horarioLimite) : null;
-  var ini, normal;
+  var ini, normal, ultima;
   if (dataValida_(limite)) {
     ini = limite.getTime() - ANTECEDENCIA_MAX_H * 3600000;
     normal = limite.getTime() - ANTECEDENCIA_NORMAL_H * 3600000;
+    ultima = limite.getTime() + ATRASO_MAX_H * 3600000;
   } else {
     ini = new Date(dataOper.getFullYear(), dataOper.getMonth(), dataOper.getDate() - 1, HORA_INICIO_VESPERA, 0, 0).getTime();
     normal = ini;
+    ultima = fim.getTime();
   }
-  return { ini: ini, normal: normal, fim: Math.min(fim.getTime(), Date.now()) };
+  // `ultima`: a saída tem que COMEÇAR até aqui. A confirmação dela pode vir
+  // depois, por isso o log continua sendo lido até `fim`.
+  return { ini: ini, normal: normal, ultima: ultima, fim: Math.min(fim.getTime(), Date.now()) };
 }
 function janelaChegada_(dataOper) {
   if (!dataValida_(dataOper)) return null;
@@ -434,7 +444,7 @@ function formatarHoraComDia_(dataHora, dataOper) {
   var mesmoDia = dataHora.getFullYear() === dataOper.getFullYear() && dataHora.getMonth() === dataOper.getMonth() && dataHora.getDate() === dataOper.getDate();
   return mesmoDia ? hora : hora + " (" + Utilities.formatDate(dataHora, GPS_TZ, "dd/MM") + ")";
 }
-function parseHoraComDia_(texto, dataOper) {
+function parseHoraComDia_(texto, dataOper, horarioLimite) {
   if (!texto || !dataValida_(dataOper)) return null;
   var t = String(texto).trim().replace(/^'/, "");
   var mh = t.match(/^(\d{1,2}):(\d{2})/);
@@ -447,7 +457,16 @@ function parseHoraComDia_(texto, dataOper) {
     if (d.getTime() - dataOper.getTime() > 300 * 24 * 3600 * 1000) d.setFullYear(dataOper.getFullYear() - 1);
     return d;
   }
-  return combinarDataHora_(dataOper, hh, mm);
+  // Sem "(dd/mm)" a hora é do dia operacional — a não ser que isso a deixe
+  // mais de ATRASO_MAX_H depois do limite da rota. Aí ela é da véspera:
+  // quem corrige Campos para "23:40" quer dizer 23:40 da noite anterior,
+  // e não um atraso de +23h40.
+  var mesmoDia = combinarDataHora_(dataOper, hh, mm);
+  var limite = horarioLimite ? dataHoraLimite_(dataOper, horarioLimite) : null;
+  if (dataValida_(limite) && mesmoDia.getTime() - limite.getTime() > ATRASO_MAX_H * 3600000) {
+    return new Date(dataOper.getFullYear(), dataOper.getMonth(), dataOper.getDate() - 1, hh, mm, 0, 0);
+  }
+  return mesmoDia;
 }
 function dataHoraLimite_(dataOper, horarioLimite) {
   var p = String(horarioLimite || HORARIO_LIMITE_PADRAO).split(":");
@@ -626,6 +645,7 @@ function coletarProgramacao_(sheet, col, colTrava) {
     var horaSaidaTexto = col.horaSaida ? String(txt[r][col.horaSaida - 1] || "") : "";
     var horaChegadaTexto = col.horaChegada ? String(txt[r][col.horaChegada - 1] || "") : "";
     var horarioLimiteTexto = col.horarioLimite ? String(txt[r][col.horarioLimite - 1] || "").replace(/^'/, "") : "";
+    var horarioLimite = getHorarioLimite_(destino);
 
     var saiuPlanilha = col.saiu ? ehSim_(txt[r][col.saiu - 1]) : false;
     var chegouPlanilha = col.chegou ? ehSim_(txt[r][col.chegou - 1]) : false;
@@ -644,7 +664,7 @@ function coletarProgramacao_(sheet, col, colTrava) {
       (carimboSaidaCol ? formatarHoraComDia_(carimboSaidaCol, dataOperacional) : "");
     var carimboSaida = carimboSaidaCol && !saidaEditada
       ? carimboSaidaCol
-      : parseHoraComDia_(horaSaidaTexto, dataOperacional);
+      : parseHoraComDia_(horaSaidaTexto, dataOperacional, horarioLimite);
 
     var carimboChegadaCol = col.dataHoraChegada && dataValida_(raw[r][col.dataHoraChegada - 1]) ? raw[r][col.dataHoraChegada - 1] : null;
     var chegadaEditada = !!col.dataHoraChegada && String(horaChegadaTexto).trim() !==
@@ -680,7 +700,7 @@ function coletarProgramacao_(sheet, col, colTrava) {
       //
       // Agora a célula é saída, não entrada: a cada rodada ela é
       // corrigida para o que a tabela diz. Mudou a tabela, mudou tudo.
-      horarioLimite: getHorarioLimite_(destino),
+      horarioLimite: horarioLimite,
       horarioLimitePlanilha: horarioLimiteTexto,
       travaManual: colTrava ? ehSim_(txt[r][colTrava - 1]) : false,
       // linha mexida à mão nesta rodada: vale o que a pessoa escreveu
@@ -968,6 +988,7 @@ function detectarSaidaBase_(eventos, dataOperacional, horarioLimite) {
     if (!(posicoes[i - 1].naBase && !posicoes[i].naBase)) continue;
 
     var t = posicoes[i].dataHora.getTime();
+    if (t > janela.ultima) break; // daí em diante é a viagem de outro dia
 
     // Antes do horário normal da rota: regra mais dura (ver saidaAntecipada_).
     if (t < janela.normal) {
@@ -1362,8 +1383,13 @@ function sincronizarHistorico_(ss, registros) {
   function montarLinha(l, antiga) {
     var saiu = l.saiu, horaSaida = l.horaSaida, atrasoMin = l.atrasoMin;
     var chegou = l.chegou, horaChegada = l.horaChegada;
-    if (antiga) {
+    // Linha que a operação corrigiu é a verdade: o Histórico copia a
+    // Programação como está. Sem isso, desfazer uma saída falsa com
+    // "Saiu? = Não" corrigia a Programação mas o Histórico seguia com a
+    // saída velha — e com o atraso dela no ranking.
+    if (antiga && !l.manual) {
       // nunca apaga um registro de saída/chegada que já existia
+      // (proteção para a Programação limpa no meio do dia)
       if (semAcento_(antiga[6]) === "sim" && String(antiga[7] || "") && saiu !== "Sim") {
         saiu = "Sim";
         horaSaida = antiga[7];
@@ -1397,7 +1423,27 @@ function sincronizarHistorico_(ss, registros) {
     hist.getRange(2 + min, 14, altura, 1).setNumberFormat("dd/MM/yyyy HH:mm");
   }
 
-  // 4) Acrescenta as linhas novas no fim, num bloco só.
+  // 4) Placa que saiu da Programação de hoje (troca de veículo) não fica
+  //    no Histórico como "não saiu". Só linhas do dia em curso, e só as
+  //    que nunca registraram saída — saída registrada não se apaga. Roda
+  //    antes de acrescentar as novas: apagar desloca as linhas de baixo.
+  var dia = registros.length ? registros[0].dataOperacional : null;
+  if (dataValida_(dia)) {
+    var prefixo = Utilities.formatDate(dia, GPS_TZ, "dd/MM/yyyy") + "|";
+    var presentes = {};
+    registros.forEach(function(l) { presentes[chaveHistorico_(l.dataOperacional, l.placa)] = true; });
+    var orfas = Object.keys(mapa).filter(function(k) { return k.indexOf(prefixo) === 0 && !presentes[k]; })
+      .map(function(k) { return mapa[k]; })
+      .sort(function(a, b) { return b - a; }); // de baixo para cima
+    orfas.forEach(function(idx) {
+      var saiuOrfa = hist.getRange(2 + idx, 7).getDisplayValues()[0][0];
+      if (semAcento_(saiuOrfa) === "sim") return;
+      hist.deleteRow(2 + idx);
+      lastRow--;
+    });
+  }
+
+  // 5) Acrescenta as linhas novas no fim, num bloco só.
   if (novos.length) {
     var primeira = lastRow + 1;
     var linhasNovas = novos.map(function(l) { return montarLinha(l, null); });
@@ -1493,7 +1539,8 @@ function atualizarMonitoramentoGPS() {
         dataOperacional: item.dataOperacional, placa: item.placa, transportadora: item.transportadora,
         destino: item.destino, tipo: item.tipo, horarioLimite: item.horarioLimite,
         saiu: saiu ? "Sim" : "Não", horaSaida: horaSaidaTexto, atrasoMin: atrasoMin, status: status,
-        chegou: item.transbordoCfg ? (chegou ? "Sim" : "Não") : "", horaChegada: horaChegadaTexto
+        chegou: item.transbordoCfg ? (chegou ? "Sim" : "Não") : "", horaChegada: horaChegadaTexto,
+        manual: !!(item.travaManual || item.edicaoManual)
       });
     });
 
