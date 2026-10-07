@@ -70,10 +70,6 @@ function criarSheet(nome, matriz) {
     insertColumnsAfter: (depois, quantas) => {
       for (const row of m) for (let i = 0; i < quantas; i++) row.push("");
     },
-    deleteRow: (n) => {
-      custo.escritas += m[0].length;
-      m.splice(n - 1, 1);
-    },
     getRange: (a, c, nr, nc) => {
       if (typeof a === "string") return alvo(1, 1, 1, 1); // getRange("A:A") só recebe formatação
       return alvo(a, c, nr === undefined ? 1 : nr, nc === undefined ? 1 : nc);
@@ -169,17 +165,12 @@ global.UrlFetchApp = {
 global.ScriptApp = { getProjectTriggers: () => [] };
 global.ContentService = { createTextOutput: (t) => ({ setMimeType: () => t }), MimeType: { JSON: "json" } };
 
-// RELÓGIO FIXO. O ranking corta a janela de HISTORICO_DIAS com new Date(),
-// e o restante do arquivo trabalha com o dia operacional 26/08/2026. Sem
-// fixar o relógio, este teste passava em agosto e quebrava sozinho 30 dias
-// depois: as linhas do fixture saíam da janela e o ranking vinha vazio.
-// 27/08 00:00 = dia operacional fechado, igual ao que acontecia antes.
+// RELÓGIO FIXO. O ranking corta a janela de 30 dias com new Date() e o
+// fixture é de 26/08/2026: sem fixar, o teste quebrava sozinho 30 dias depois.
 const AGORA = new Date(2026, 7, 27, 0, 0, 0).getTime();
 const DateReal = Date;
 global.Date = class extends DateReal {
-  constructor() {
-    super(...(arguments.length ? arguments : [AGORA]));
-  }
+  constructor() { super(...(arguments.length ? arguments : [AGORA])); }
   static now() { return AGORA; }
 };
 
@@ -338,97 +329,47 @@ console.log("\n7) Horário-limite errado na planilha é corrigido pela tabela do
   HORARIO_LIMITE.find((h) => h.match.includes("angra")).limite = original;
 }
 
-console.log("\n7.1) O Histórico acompanha as correções da operação");
+console.log("\n7.1) Correção na Programação chega no Histórico na rodada seguinte");
 {
-  const linhaHist = (placa) => histSheet.matriz.slice(1).find((r) => r[1] === placa);
+  const H = (placa) => histSheet.matriz.slice(1).find((r) => r[1] === placa);
   const hora = (r) => String(r[7] == null ? "" : r[7]).replace(/^'/, "");
 
-  // A) corrigir a hora: o Histórico troca a hora e o atraso
+  // hora corrigida
   montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS")]);
   atualizarMonitoramentoGPS();
   progSheet.matriz[1][C["Hora Saída"]] = "05:05";
   atualizarMonitoramentoGPS();
-  ok("hora corrigida chega no Histórico", hora(linhaHist("KAA1A11")) === "05:05", hora(linhaHist("KAA1A11")));
-  ok("atraso recalculado no Histórico", linhaHist("KAA1A11")[8] === -55, linhaHist("KAA1A11")[8]);
+  ok("hora corrigida no Histórico", hora(H("KAA1A11")) === "05:05", hora(H("KAA1A11")));
+  ok("atraso recalculado no Histórico", H("KAA1A11")[8] === -55, H("KAA1A11")[8]);
 
-  // B) desfazer uma saída falsa: antes o Histórico ficava com "Sim 05:30"
+  // Saiu? = Não: antes o Histórico ficava com "Sim 05:30"
   montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS")]);
   atualizarMonitoramentoGPS();
   progSheet.matriz[1][C["Saiu?"]] = "Não";
   atualizarMonitoramentoGPS();
-  ok("Saiu? = Não chega no Histórico", linhaHist("KAA1A11")[6] === "Não", linhaHist("KAA1A11")[6]);
-  ok("sem a hora velha no Histórico", hora(linhaHist("KAA1A11")) === "", hora(linhaHist("KAA1A11")));
+  ok("Saiu? = Não chega no Histórico", H("KAA1A11")[6] === "Não", H("KAA1A11")[6]);
+  ok("sem a hora antiga no Histórico", hora(H("KAA1A11")) === "", hora(H("KAA1A11")));
   atualizarMonitoramentoGPS();
-  ok("e continua assim na rodada seguinte", linhaHist("KAA1A11")[6] === "Não", linhaHist("KAA1A11")[6]);
+  ok("continua Não na rodada seguinte", H("KAA1A11")[6] === "Não", H("KAA1A11")[6]);
 
-  // C) trocar a placa: antes a antiga ficava como "não saiu" (caso TTW8F31)
-  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS"), linhaVazia("KBB2B22", "PETROPOLIS")]);
-  atualizarMonitoramentoGPS();
-  progSheet.matriz[2][C["Placa"]] = "KCC3C33";
-  atualizarMonitoramentoGPS();
-  ok("placa trocada sai do Histórico", !linhaHist("KBB2B22"),
-    histSheet.matriz.slice(1).map((r) => r[1]).join(","));
-  ok("placa nova entra", !!linhaHist("KCC3C33"));
-  ok("quem saiu continua", linhaHist("KAA1A11") && linhaHist("KAA1A11")[6] === "Sim");
-
-  // ...mas placa que JÁ SAIU e sumiu da Programação não é apagada
-  progSheet.matriz.splice(1, 1); // tira KAA1A11, que tinha saído
-  atualizarMonitoramentoGPS();
-  ok("saída registrada nunca é apagada", !!linhaHist("KAA1A11") && linhaHist("KAA1A11")[6] === "Sim");
-
-  // ...e dia anterior não é tocado
-  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS")]);
-  histSheet.matriz.push([D25, "KZZ9Z99", "TRANS SUL", "PETROPOLIS", "Entrega", "06:00",
-    "Não", "", 999, "Não saiu", "Não saiu", "", "", D25]);
-  atualizarMonitoramentoGPS();
-  ok("linha de outro dia fica como estava", !!linhaHist("KZZ9Z99"));
-
-  // D) Campos (limite 00:00) corrigido para "23:40", que foi na véspera
-  montarPlanilha([linhaVazia("KAA1A11", "CAMPOS")]);
-  atualizarMonitoramentoGPS();
-  progSheet.matriz[1][C["Hora Saída"]] = "23:40";
-  atualizarMonitoramentoGPS();
-  ok("23:40 em Campos é da véspera, não +23h40", linhaHist("KAA1A11")[8] === -20, linhaHist("KAA1A11")[8]);
-  ok("a planilha mostra o dia", cel(2, "Hora Saída") === "23:40 (25/08)", cel(2, "Hora Saída"));
-}
-
-console.log("\n7.2) Placa com espaço na frente não some do painel (KVP4J14, 07/10)");
-{
-  // Caso real: " KVP4J14 [KKZ9D50]" e " KWN7H48", ambos Rio. O espaço fazia a
-  // placa vir vazia e a linha sumia: 13 transbordos na planilha, 11 no painel,
-  // e a correção manual da KVP nunca era lida.
+  // placa com espaço antes (caso KVP4J14 de 07/10): a linha é lida e a
+  // correção chega no Histórico
   const kvp = linhaVazia(" KVP4J14 [KKZ9D50]", "RIO DE JANEIRO - RUA DO TRIGO");
-  kvp[C["Saiu?"]] = "Sim"; kvp[C["Hora Saída"]] = "00:14";
-  kvp[C["Chegou?"]] = "Sim"; kvp[C["Hora Chegada"]] = "04:01"; kvp[C["Trava Manual"]] = "S";
-  montarPlanilha([
-    linhaVazia("KAA1A11", "RIO DE JANEIRO - RUA DO TRIGO"),
-    linhaVazia(" KWN7H48", "RIO DE JANEIRO - RUA DO TRIGO"),
-    kvp,
-  ]);
+  kvp[C["Saiu?"]] = "Sim"; kvp[C["Hora Saída"]] = "00:14"; kvp[C["Trava Manual"]] = "S";
+  montarPlanilha([kvp]);
   atualizarMonitoramentoGPS();
-  const col = mapearColunasProgramacao_(progSheet);
-  const op = () => montarOperacaoDaProgramacao_(coletarProgramacao_(progSheet, col, garantirColunaTrava_(progSheet)), lerMonitoramento_());
-  const placas = op().map((o) => o.placa);
-  ok("as 3 linhas entram no painel", placas.length === 3, placas.join(","));
-  ok("as 3 contam como transbordo", op().filter((o) => o.tipo === "Transbordo").length === 3);
-  const k = op().find((o) => o.placa === "KVP4J14");
-  ok("KVP4J14 é lida", !!k);
-  ok("a correção manual da saída vale (00:14)", k && k.horaSaida === "00:14", k && k.horaSaida);
-  ok("a correção manual da chegada vale (04:01)", k && k.horaChegada === "04:01", k && k.horaChegada);
-  ok("KVP4J14 entra no Histórico", histSheet.matriz.some((r) => r[1] === "KVP4J14"));
+  ok("placa com espaço entra no Histórico", !!H("KVP4J14"), histSheet.matriz.slice(1).map((r) => r[1]).join(","));
+  ok("com a hora corrigida (00:14)", H("KVP4J14") && hora(H("KVP4J14")) === "00:14", H("KVP4J14") && hora(H("KVP4J14")));
 
-  // Placa que não dá para ler fica MARCADA na planilha, em vez de sumir
-  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS"), linhaVazia("KVP4J1", "PETROPOLIS"),
-    linhaVazia("KAA1A11", "PETROPOLIS")]);
+  // a proteção antiga continua para linha que o script controla: carimbo
+  // perdido (Programação limpa) não apaga a saída do Histórico
+  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS")]);
   atualizarMonitoramentoGPS();
-  ok("placa errada é avisada na linha", String(cel(3, "Status GPS")).indexOf("NÃO ENTRA NO PAINEL") >= 0, cel(3, "Status GPS"));
-  ok("placa repetida é avisada na linha", String(cel(4, "Status GPS")).indexOf("repetida, já está na linha 2") >= 0, cel(4, "Status GPS"));
-  ok("a linha boa não recebe aviso", String(cel(2, "Status GPS")).indexOf("NÃO ENTRA") < 0, cel(2, "Status GPS"));
-
-  // Corrigiu a placa: o aviso some sozinho, mesmo sem resposta do GPS
-  progSheet.matriz[2][C["Placa"]] = "KVP4J14";
+  ["Saiu?", "Hora Saída", "Data/Hora Saída"].forEach((c) => (progSheet.matriz[1][C[c]] = ""));
+  const logOriginal = LOGS.KAA1A11; LOGS.KAA1A11 = FICOU;
   atualizarMonitoramentoGPS();
-  ok("placa corrigida: aviso some", String(cel(3, "Status GPS")).indexOf("NÃO ENTRA") < 0, cel(3, "Status GPS"));
+  LOGS.KAA1A11 = logOriginal;
+  ok("sem correção manual, saída registrada não some do Histórico", H("KAA1A11")[6] === "Sim", H("KAA1A11")[6]);
 }
 
 console.log("\n8) Histórico grande: linhas antigas intocadas e custo limitado à janela");

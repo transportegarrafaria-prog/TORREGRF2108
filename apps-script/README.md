@@ -29,11 +29,10 @@ detecção do GPS:
 
 | Para… | Faça isto na Programação |
 |---|---|
-| Corrigir a hora de saída | escreva a hora certa em **Hora Saída** (`06:15`; para Lagos, Campos, Angra e Rio pode escrever só `23:40` — o script entende que foi na véspera) |
+| Corrigir a hora de saída | escreva a hora certa em **Hora Saída** (`06:15`, ou `22:40 (24/08)` se foi na véspera) |
 | Derrubar uma saída que não aconteceu | ponha **Saiu? = Não** |
 | Corrigir a chegada no ponto de apoio | escreva em **Hora Chegada** |
 | Derrubar uma chegada errada | ponha **Chegou? = Não** |
-| Trocar o veículo | troque a placa; a antiga sai do Histórico do dia (se não tinha saído) |
 
 Na rodada seguinte o script reconhece a edição, ajusta a coluna-carimbo
 correspondente e marca a linha como travada — a partir daí ele não mexe mais
@@ -41,24 +40,10 @@ naquele campo até virar o dia. O painel passa a mostrar o seu valor na
 atualização seguinte, e o atraso é recalculado em cima da hora que você
 escreveu.
 
-**O Histórico acompanha tudo isso na mesma rodada.** Linha corrigida pela
-operação é copiada para o Histórico do jeito que está na Programação —
-inclusive "Saiu? = Não", que antes ficava com a saída velha e o atraso dela no
-ranking. A proteção "saída registrada não some do Histórico" continua valendo
-só para linhas que o script controla (Programação limpa no meio do dia).
-
-Hora sem data vale para o dia operacional, a não ser que isso a deixe mais de
-`ATRASO_MAX_H` (12h) depois do limite: aí é da véspera. Sem essa regra,
-corrigir Campos para `23:40` virava +23h40 — há três casos assim no Histórico
-de setembro. Pelo mesmo motivo, o GPS não aceita como saída de hoje uma saída
-mais de 12h depois do limite: Campos saindo 22:19 é a viagem de amanhã.
-
-**Linha que o script não consegue ler fica marcada, não some.** Placa
-irreconhecível ou repetida no mesmo dia recebe na coluna **Status GPS** um
-`⚠ NÃO ENTRA NO PAINEL: …` com o motivo, e o aviso sai sozinho quando a placa
-é corrigida. Espaço antes ou depois da placa não atrapalha mais: era o que
-derrubava `" KVP4J14"` e `" KWN7H48"` em 07/10 (13 transbordos na planilha, 11
-no painel, e a correção manual da KVP nunca lida).
+**O Histórico acompanha a correção na rodada seguinte**, inclusive
+"Saiu? = Não". A regra "saída registrada não some do Histórico" vale só para
+as linhas que o script controla. Espaço antes da placa não tira mais a linha
+do painel (era o que acontecia com `" KVP4J14"` em 07/10).
 
 A trava é **por campo**: corrigir a hora de saída de um transbordo não impede
 o script de detectar a chegada no ponto de apoio depois.
@@ -139,61 +124,16 @@ O horário carimbado continua sendo o da transição, não o da confirmação. S
 prova de movimento só chegar no ciclo seguinte, a hora da saída não muda —
 atrasa a exibição em um ciclo, nunca o registro.
 
-### Por que rodar ao vivo acertava menos que rodar depois
+Quando não existe essa transição na janela, o veículo pode ter saído antes de
+a janela abrir — ou pode estar apenas estacionado longe da base. Os dois casos
+se parecem no GPS, então o segundo só é aceito como saída **com prova de
+movimento**: velocidade acima do limiar e deslocamento real em relação ao
+ponto onde a janela abriu.
 
-A operação percebeu que, cadastrando as placas **depois** de todo mundo sair, os
-horários batiam melhor do que cadastrando antes. O motivo é estrutural: o teste
-de manobra olha para a **frente** — "voltou à base em até `MAX_MANOBRA_MIN`?".
-Rodando de madrugada a cada `GPS_INTERVALO_MIN`, esse futuro ainda não existe. O
-script via o caminhão na balança do outro lado da estrada, carimbava, e o
-carimbo congelava. Rodando depois, com o dia inteiro no log, a volta está lá e a
-manobra é descartada.
-
-Por isso a transição só é carimbada quando a dúvida está fechada:
-
-| Situação | O que acontece |
-|---|---|
-| passou de `DIST_SAIDA_DEFINITIVA_M` (1,5 km) da base | carimba na hora — manobra não chega tão longe |
-| a janela de manobra inteira passou sem volta | carimba — a dúvida venceu |
-| nenhuma das duas ainda | não carimba nada; o próximo ciclo decide |
-
-Na prática isso não atrasa o painel. Uma saída de verdade passa de 1,5 km em
-um ou dois minutos, então ela é carimbada no **primeiro ciclo depois da saída**
-— o mesmo de antes. Quem espera é só o caso duvidoso, que era justamente o que
-vinha errado. E o horário gravado é sempre o da transição, nunca o da
-confirmação.
-
-O teste 7.9 mede exatamente isso: replica o log de 10 em 10 minutos (placa
-cadastrada antes) e de uma vez (placa cadastrada depois), e exige o mesmo
-resultado nos dois.
-
-### A janela é de cada rota
-
-A saída é procurada a partir de `ANTECEDENCIA_MAX_H` (8h) antes do horário-limite
-da rota — Lagos 00:00 a partir das 16:00 da véspera, Rio 03:00 a partir das
-19:00, Petrópolis 06:00 a partir das 22:00. Antes era 21:00 para todo mundo, e
-isso gerava os dois erros mais comuns do Histórico:
-
-| O que acontecia | Exemplo real | Por quê |
-|---|---|---|
-| caminhão chegando na GRF depois das 21h virava saída | 13 saídas entre 21:00 e 21:20 da véspera (HJL5J40, TTW8F31, CHP9C36…) | fora da base quando a janela abria + andando = "já estava viajando" |
-| motorista indo dormir no posto virava saída | LSB2J94 Petrópolis "saiu 23:05" | Petrópolis só sai de madrugada, mas a janela já estava aberta |
-
-As regras agora:
-
-- **Saída só existe se o GPS viu o caminhão na base e depois saindo.** Quem
-  aparece andando fora sem passar pela base — voltando da rota, vindo do posto
-  para carregar — não saiu. O antigo "já estava viajando quando a janela abriu"
-  foi removido; ele existia só porque Lagos saindo 20:40 ficava fora da janela
-  das 21h, e com a janela por rota essa saída cai dentro.
-- **Saída antecipada** — mais de `ANTECEDENCIA_NORMAL_H` (4h) antes do limite —
-  só vale se o caminhão não voltou até o horário normal e foi a mais de
-  `DIST_ESTRADA_M` (20 km) da base. O Posto Limoeiro fica a ~10 km: dormir lá
-  nunca passa. Rio saindo 22h e pegando a BR passa, com a hora real.
-
-O teste 7.10 roda sete cenários da operação ao vivo (de 10 em 10 minutos) e
-depois (log inteiro), e exige a saída certa nos dois. Contra o script anterior,
-quatro deles erravam.
+Sem essa exigência, dois veículos que passaram a noite num posto a 10 km da
+base, com o motor desligado e a mesma coordenada, tiveram o primeiro ponto de
+GPS depois das 21h da véspera registrado como "saída às 21:00" — e, como 21h
+vem antes do limite das 06h, ainda apareceram como "No prazo".
 
 ### Saiu, mas sem hora
 
