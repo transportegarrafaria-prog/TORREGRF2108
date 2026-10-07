@@ -605,7 +605,7 @@ function resetarSeProgramacaoNova_(sheet, col, colTrava) {
  * saída/chegada), que tem prioridade sobre qualquer nova detecção.
  */
 function coletarProgramacao_(sheet, col, colTrava) {
-  if (sheet.getLastRow() < 2 || !col.placa) return { dataAlvo: "", dataOperacional: null, itens: [] };
+  if (sheet.getLastRow() < 2 || !col.placa) return { dataAlvo: "", dataOperacional: null, itens: [], ignoradas: [] };
 
   var lastRow = sheet.getLastRow();
   var lastCol = sheet.getLastColumn();
@@ -625,6 +625,9 @@ function coletarProgramacao_(sheet, col, colTrava) {
 
   var vistos = {};
   var itens = [];
+  // Linhas do dia que o script não consegue ler. Antes elas sumiam em
+  // silêncio; agora são marcadas na própria planilha (sinalizarIgnoradas_).
+  var ignoradas = [];
 
   for (var r = 0; r < raw.length; r++) {
     if (col.data) {
@@ -632,11 +635,24 @@ function coletarProgramacao_(sheet, col, colTrava) {
       if (!linhaData || dataKey_(linhaData) !== dataAlvo) continue;
     }
 
-    var placaTexto = String(txt[r][col.placa - 1] || "").split(/[\s\[]/)[0];
+    // trim antes de cortar: com um espaço na frente (" KVP4J14 [KKZ9D50]")
+    // o primeiro pedaço vinha vazio, a placa era dada como inválida e a linha
+    // sumia do painel — sem aviso, e sem aceitar correção nenhuma.
+    var celulaPlaca = String(txt[r][col.placa - 1] || "").trim();
+    var placaTexto = celulaPlaca.split(/[\s\[]/)[0];
     var placa = normalizarPlaca_(placaTexto);
-    if (!placaValida_(placa)) continue;
-    if (vistos[placa]) continue;
-    vistos[placa] = true;
+    var statusAtual = col.statusGPS ? String(txt[r][col.statusGPS - 1] || "") : "";
+    if (!placaValida_(placa)) {
+      if (celulaPlaca) ignoradas.push({ linha: r + 2, statusAtual: statusAtual,
+        motivo: "placa não reconhecida (\"" + celulaPlaca + "\")" });
+      continue;
+    }
+    if (vistos[placa]) {
+      ignoradas.push({ linha: r + 2, statusAtual: statusAtual,
+        motivo: "placa repetida, já está na linha " + vistos[placa] });
+      continue;
+    }
+    vistos[placa] = r + 2;
 
     var destino = col.destino ? String(txt[r][col.destino - 1] || "") : "";
     var transbordoCfg = getTransbordo_(destino);
@@ -727,7 +743,7 @@ function coletarProgramacao_(sheet, col, colTrava) {
     });
   }
 
-  return { dataAlvo: dataAlvo, dataOperacional: dataOperacional, itens: itens };
+  return { dataAlvo: dataAlvo, dataOperacional: dataOperacional, itens: itens, ignoradas: ignoradas };
 }
 
 
@@ -1302,6 +1318,18 @@ function escreverSeMudou_(sheet, linha, coluna, valor, atual) {
   sheet.getRange(linha, coluna).setValue(novo);
 }
 
+// Marca de linha que o painel não leu. Vai na coluna Status GPS, que é do
+// script; some sozinha quando a linha volta a ser lida.
+var AVISO_LINHA = "⚠ NÃO ENTRA NO PAINEL: ";
+
+function sinalizarIgnoradas_(sheet, col, ignoradas) {
+  if (!col.statusGPS) return;
+  (ignoradas || []).forEach(function(ig) {
+    escreverSeMudou_(sheet, ig.linha, col.statusGPS, AVISO_LINHA + ig.motivo, ig.statusAtual);
+    Logger.log("Linha " + ig.linha + " ignorada: " + ig.motivo);
+  });
+}
+
 /**
  * Mantém a coluna-carimbo igual ao que ficou valendo na linha.
  * Grava quando há registro novo, reescreve quando o operador mudou a
@@ -1479,6 +1507,7 @@ function atualizarMonitoramentoGPS() {
     col = mapearColunasProgramacao_(progSheet);
 
     var prog = coletarProgramacao_(progSheet, col, colTrava);
+    sinalizarIgnoradas_(progSheet, col, prog.ignoradas);
     if (!prog.itens.length) {
       gravarMonitoramento_([]);
       Logger.log("Nenhum veículo encontrado na Programação de hoje.");
@@ -1532,6 +1561,10 @@ function atualizarMonitoramentoGPS() {
       if (resumo && resumo.ok) {
         escreverSeMudou_(progSheet, item.linhaPlanilha, col.statusGPS, resumo.statusEclipse, item.statusGpsPlanilha);
         escreverSeMudou_(progSheet, item.linhaPlanilha, col.ultimaPosicao, resumo.endereco, item.ultimaPosicaoPlanilha);
+      } else if (item.statusGpsPlanilha.indexOf(AVISO_LINHA) === 0) {
+        // a linha voltou a ser lida (placa corrigida) mas o GPS não respondeu:
+        // o aviso antigo não pode ficar lá dizendo que ela está fora do painel
+        escreverSeMudou_(progSheet, item.linhaPlanilha, col.statusGPS, "", item.statusGpsPlanilha);
       }
 
       linhasMonitor.push(linhaMonitoramento_(item, resumo));
@@ -1928,6 +1961,9 @@ function diagnosticarDeteccaoDoDia() {
   if (!prog.itens.length) { Logger.log("Nenhum veículo na Programação."); return; }
 
   Logger.log("Data operacional: " + prog.dataAlvo + " | " + prog.itens.length + " veículos");
+  (prog.ignoradas || []).forEach(function(ig) {
+    Logger.log("LINHA " + ig.linha + " NÃO ENTRA NO PAINEL: " + ig.motivo);
+  });
   Logger.log("Limite de pontos por placa: " + GPS_MONITOR_LIMIT);
   Logger.log("");
 

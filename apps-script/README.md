@@ -53,6 +53,13 @@ corrigir Campos para `23:40` virava +23h40 — há três casos assim no Históri
 de setembro. Pelo mesmo motivo, o GPS não aceita como saída de hoje uma saída
 mais de 12h depois do limite: Campos saindo 22:19 é a viagem de amanhã.
 
+**Linha que o script não consegue ler fica marcada, não some.** Placa
+irreconhecível ou repetida no mesmo dia recebe na coluna **Status GPS** um
+`⚠ NÃO ENTRA NO PAINEL: …` com o motivo, e o aviso sai sozinho quando a placa
+é corrigida. Espaço antes ou depois da placa não atrapalha mais: era o que
+derrubava `" KVP4J14"` e `" KWN7H48"` em 07/10 (13 transbordos na planilha, 11
+no painel, e a correção manual da KVP nunca lida).
+
 A trava é **por campo**: corrigir a hora de saída de um transbordo não impede
 o script de detectar a chegada no ponto de apoio depois.
 

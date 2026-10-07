@@ -392,6 +392,45 @@ console.log("\n7.1) O Histórico acompanha as correções da operação");
   ok("a planilha mostra o dia", cel(2, "Hora Saída") === "23:40 (25/08)", cel(2, "Hora Saída"));
 }
 
+console.log("\n7.2) Placa com espaço na frente não some do painel (KVP4J14, 07/10)");
+{
+  // Caso real: " KVP4J14 [KKZ9D50]" e " KWN7H48", ambos Rio. O espaço fazia a
+  // placa vir vazia e a linha sumia: 13 transbordos na planilha, 11 no painel,
+  // e a correção manual da KVP nunca era lida.
+  const kvp = linhaVazia(" KVP4J14 [KKZ9D50]", "RIO DE JANEIRO - RUA DO TRIGO");
+  kvp[C["Saiu?"]] = "Sim"; kvp[C["Hora Saída"]] = "00:14";
+  kvp[C["Chegou?"]] = "Sim"; kvp[C["Hora Chegada"]] = "04:01"; kvp[C["Trava Manual"]] = "S";
+  montarPlanilha([
+    linhaVazia("KAA1A11", "RIO DE JANEIRO - RUA DO TRIGO"),
+    linhaVazia(" KWN7H48", "RIO DE JANEIRO - RUA DO TRIGO"),
+    kvp,
+  ]);
+  atualizarMonitoramentoGPS();
+  const col = mapearColunasProgramacao_(progSheet);
+  const op = () => montarOperacaoDaProgramacao_(coletarProgramacao_(progSheet, col, garantirColunaTrava_(progSheet)), lerMonitoramento_());
+  const placas = op().map((o) => o.placa);
+  ok("as 3 linhas entram no painel", placas.length === 3, placas.join(","));
+  ok("as 3 contam como transbordo", op().filter((o) => o.tipo === "Transbordo").length === 3);
+  const k = op().find((o) => o.placa === "KVP4J14");
+  ok("KVP4J14 é lida", !!k);
+  ok("a correção manual da saída vale (00:14)", k && k.horaSaida === "00:14", k && k.horaSaida);
+  ok("a correção manual da chegada vale (04:01)", k && k.horaChegada === "04:01", k && k.horaChegada);
+  ok("KVP4J14 entra no Histórico", histSheet.matriz.some((r) => r[1] === "KVP4J14"));
+
+  // Placa que não dá para ler fica MARCADA na planilha, em vez de sumir
+  montarPlanilha([linhaVazia("KAA1A11", "PETROPOLIS"), linhaVazia("KVP4J1", "PETROPOLIS"),
+    linhaVazia("KAA1A11", "PETROPOLIS")]);
+  atualizarMonitoramentoGPS();
+  ok("placa errada é avisada na linha", String(cel(3, "Status GPS")).indexOf("NÃO ENTRA NO PAINEL") >= 0, cel(3, "Status GPS"));
+  ok("placa repetida é avisada na linha", String(cel(4, "Status GPS")).indexOf("repetida, já está na linha 2") >= 0, cel(4, "Status GPS"));
+  ok("a linha boa não recebe aviso", String(cel(2, "Status GPS")).indexOf("NÃO ENTRA") < 0, cel(2, "Status GPS"));
+
+  // Corrigiu a placa: o aviso some sozinho, mesmo sem resposta do GPS
+  progSheet.matriz[2][C["Placa"]] = "KVP4J14";
+  atualizarMonitoramentoGPS();
+  ok("placa corrigida: aviso some", String(cel(3, "Status GPS")).indexOf("NÃO ENTRA") < 0, cel(3, "Status GPS"));
+}
+
 console.log("\n8) Histórico grande: linhas antigas intocadas e custo limitado à janela");
 {
   // 90 dias de histórico, 6 veículos por dia = 540 linhas.
